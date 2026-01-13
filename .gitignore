@@ -25,6 +25,10 @@
 Thumbs.db
 *.pem
 
+# database dumps / backups (never commit real data)
+/backup.sql
+/backup*.sql
+
 # private docs
 README_FULL.md
 
@@ -52,3 +56,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Supabase CLI (local project + temp artifacts)
+# Ignored because it can contain local metadata (e.g. pooler URL, project ref).
+/supabase/
