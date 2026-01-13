@@ -1,0 +1,138 @@
+'use client'
+
+import { useState, useEffect, useCallback } from 'react';
+import { usersApi, type ApiUser } from '../api/users.api';
+import type { Role } from '@/types';
+
+export const useUsers = (organizationId?: string) => {
+  const [users, setUsers] = useState<ApiUser[]>([]);
+  const [callerRole, setCallerRole] = useState<Role | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const fetchUsers = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const data = await usersApi.getUsers(organizationId);
+      setUsers(data.users);
+      setCallerRole(data.caller_role);
+      setError(null);
+    } catch (err) {
+      setError(err as Error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
+
+  /**
+   * Invite a new user
+   */
+  const inviteUser = async (email: string, role: Role, organizationId?: string | null, fullName?: string | null) => {
+    const result = await usersApi.inviteUser(email, role, organizationId, fullName);
+    // Refetch to get updated list
+    await fetchUsers();
+    return result;
+  };
+
+  /**
+   * Change a user's role
+   */
+  const changeUserRole = async (userId: string, newRole: Role) => {
+    const result = await usersApi.changeUserRole(userId, newRole);
+    // Update local state
+    setUsers(users.map(u => 
+      u.id === userId ? { ...u, role: newRole } : u
+    ));
+    return result;
+  };
+
+  /**
+   * Disable a user (soft delete)
+   */
+  const disableUser = async (userId: string) => {
+    const result = await usersApi.disableUser(userId);
+    // Update local state (keep row visible for re-enable)
+    setUsers(users.map(u => (u.id === userId ? { ...u, is_active: false } : u)));
+    return result;
+  };
+
+  /**
+   * Enable a user (reactivate)
+   */
+  const enableUser = async (userId: string) => {
+    const result = await usersApi.enableUser(userId);
+    setUsers(users.map(u => (u.id === userId ? { ...u, is_active: true } : u)));
+    return result;
+  };
+
+  /**
+   * Resend an invite email to a user
+   */
+  const resendInvite = async (userId: string) => {
+    return usersApi.resendInvite(userId);
+  };
+
+  /**
+   * Assign/reassign an organization_admin to an organization
+   */
+  const assignOrganization = async (userId: string, organizationId: string) => {
+    const result = await usersApi.assignOrganization(userId, organizationId);
+    // Refetch so status (is_active) stays correct when moving users between active/inactive orgs.
+    await fetchUsers();
+    return result;
+  };
+
+  /**
+   * Bulk assign org-scoped users to an organization.
+   * We call the existing single-user endpoint for each user, then refetch once at the end.
+   */
+  const bulkAssignOrganization = async (userIds: string[], organizationId: string) => {
+    const failures: Array<{ userId: string; error: string }> = [];
+
+    for (const userId of userIds) {
+      try {
+        await usersApi.assignOrganization(userId, organizationId);
+      } catch (e) {
+        failures.push({
+          userId,
+          error: e instanceof Error ? e.message : "Failed to assign organization",
+        });
+      }
+    }
+
+    await fetchUsers();
+
+    return {
+      successCount: Math.max(0, userIds.length - failures.length),
+      failureCount: failures.length,
+      failures,
+    };
+  };
+
+  /**
+   * Send password setup link to a user
+   */
+  const sendPasswordSetupLink = async (userId: string) => {
+    return usersApi.sendPasswordSetupLink(userId);
+  };
+
+  return {
+    users,
+    callerRole,
+    isLoading,
+    error,
+    refetch: fetchUsers,
+    inviteUser,
+    changeUserRole,
+    disableUser,
+    enableUser,
+    resendInvite,
+    assignOrganization,
+    bulkAssignOrganization,
+    sendPasswordSetupLink,
+  };
+};

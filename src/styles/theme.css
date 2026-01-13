@@ -1,0 +1,74 @@
+:root {
+  /* Brand variables (loaded from Supabase will override these) */
+  --brand-primary: #1B8755;
+  --brand-secondary: #0E4D2C;
+  --brand-background: #FFFFFF;
+  --brand-text: #1A1A1A;
+  --brand-border: #E5E7EB;
+  --brand-highlight: #A3D9A5;
+  --brand-white: #FFFFFF;
+  --brand-black: #000000;
+  --brand-gray: #808080;
+  --brand-light-gray: #D9D9D9;
+  --brand-dark-gray: #404040;
+  --brand-gold-text: #a07844;
+  --brand-transparent: transparent;
+  --brand-pill-bg1: #e6fffc;
+  --brand-pill-bg2: #e9faf0;
+  --brand-pill-bg3: #fef7e4;
+  --brand-radius: 10px;
+  --brand-shadow: 0 0 10px 0 rgba(0, 0, 0, 0.1);
+  --brand-transition: all 0.3s ease;
+
+  /* ============================================ */
+  /* MAP BRAND VARIABLES TO TAILWIND/SHADCN      */
+  /* ============================================ */
+  
+  /* Primary color (used by bg-primary, text-primary, etc.) */
+  --primary: var(--brand-primary);
+  --primary-foreground: var(--brand-white);
+  
+  /* Secondary color */
+  --secondary: var(--brand-secondary);
+  --secondary-foreground: var(--brand-white);
+  
+  /* Background & text */
+  --background: var(--brand-background);
+  --foreground: var(--brand-text);
+  
+  /* Borders */
+  --border: var(--brand-border);
+  --input: var(--brand-border);
+  
+  /* Cards & popovers */
+  --card: var(--brand-white);
+  --card-foreground: var(--brand-text);
+  --popover: var(--brand-white);
+  --popover-foreground: var(--brand-text);
+  
+  /* Muted colors */
+  --muted: var(--brand-light-gray);
+  --muted-foreground: var(--brand-gray);
+  
+  /* Accent */
+  --accent: var(--brand-highlight);
+  --accent-foreground: var(--brand-text);
+  
+  /* Sidebar specific */
+  --sidebar-bg: var(--brand-primary);
+  --sidebar-border: var(--brand-primary);
+  --sidebar-text: var(--brand-white);
+  --sidebar-text-bg: var(--brand-transparent);
+  --sidebar-hover-text: var(--brand-text);
+  --sidebar-hover-text-bg: var(--brand-white);
+
+  /* Buttons */
+  --button-bg: var(--brand-primary);
+  --button-text: var(--brand-white);
+  --button-border: var(--brand-primary);
+  --button-hover-bg: var(--brand-secondary);
+  --button-hover-text: var(--brand-white);
+  
+  /* Radius */
+  --radius: var(--brand-radius);
+}
