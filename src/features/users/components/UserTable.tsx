@@ -155,9 +155,10 @@ export const UserTable = ({
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <h2 className="text-2xl font-bold">{title}</h2>
         <Button
+          className="shrink-0"
           onClick={() => setIsFormOpen(true)}
           disabled={!callerRole || (callerRole !== 'super_admin' && callerRole !== 'system_admin' && callerRole !== 'organization_admin')}
         >
@@ -308,7 +309,8 @@ export const UserTable = ({
       )}
 
       <div className="border rounded-lg overflow-hidden">
-        <table className="w-full">
+        <div className="w-full overflow-x-auto">
+          <table className="min-w-max w-full">
           <thead className="bg-gray-50">
             <tr>
               {showSelectionColumn ? (
@@ -399,7 +401,8 @@ export const UserTable = ({
               ))
             )}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
 
       <UserTableBulkFilterModal

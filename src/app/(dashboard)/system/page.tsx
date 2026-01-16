@@ -665,9 +665,9 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
             </div>
           ) : null}
 
-          <div className="mt-4 overflow-hidden rounded-lg border">
-            <div className="overflow-x-auto">
-              <table className="w-full">
+          <div className="mt-4 rounded-lg border">
+            <div className="w-full overflow-x-auto">
+              <table className="min-w-max w-full">
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Organization</th>
@@ -721,8 +721,9 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
             </div>
           ) : (
             <>
-              <div className="overflow-hidden rounded-lg border">
-                <table className="w-full">
+              <div className="rounded-lg border">
+                <div className="w-full overflow-x-auto">
+                  <table className="min-w-max w-full">
                   <thead className="bg-muted/50">
                     <tr>
                       <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Time</th>
@@ -749,7 +750,8 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                  </table>
+                </div>
               </div>
 
               <div className="mt-4 flex items-center justify-between gap-3 text-sm">

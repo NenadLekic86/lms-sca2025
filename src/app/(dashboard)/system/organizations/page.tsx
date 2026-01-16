@@ -27,15 +27,15 @@ export default function SystemOrganizationsPage() {
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <Building2 className="h-8 w-8 text-primary" />
+          <Building2 className="h-8 w-8 text-primary shrink-0" />
           <div>
             <h1 className="text-2xl font-bold text-foreground">Organizations</h1>
             <p className="text-muted-foreground">Manage all organizations in the system</p>
           </div>
         </div>
-        <Button className="flex items-center gap-2" onClick={() => setIsCreateOpen((v) => !v)}>
+        <Button className="flex items-center gap-2 shrink-0" onClick={() => setIsCreateOpen((v) => !v)}>
           <Plus size={18} />
           {isCreateOpen ? "Close" : "Add Organization"}
         </Button>
@@ -83,7 +83,8 @@ export default function SystemOrganizationsPage() {
 
       {/* Organizations Table */}
       <div className="bg-card border rounded-lg shadow-sm overflow-hidden">
-        <table className="w-full">
+        <div className="w-full overflow-x-auto">
+          <table className="min-w-max w-full">
           <thead className="bg-muted/50 border-b">
             <tr>
               <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Organization</th>
@@ -193,7 +194,8 @@ export default function SystemOrganizationsPage() {
               ))
             )}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
     </div>
   );

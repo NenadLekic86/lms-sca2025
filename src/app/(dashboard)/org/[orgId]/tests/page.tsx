@@ -99,10 +99,10 @@ export default async function TestsPage({ params }: { params: Promise<{ orgId: s
       ) : null}
 
       <div className="bg-card border rounded-lg shadow-sm overflow-hidden">
-        <table className="w-full">
+        <div className="w-full overflow-x-auto">
+          <table className="min-w-max w-full">
           <thead className="bg-muted/50 border-b">
             <tr>
-              <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Title</th>
               <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Course</th>
               <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Attempts</th>
               <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Pass score</th>
@@ -119,8 +119,6 @@ export default async function TestsPage({ params }: { params: Promise<{ orgId: s
             ) : (
               tests.map((t) => {
                 const title = t.title ?? "(untitled)";
-                const course = t.course_id ? courseMap.get(t.course_id) : null;
-                const courseLabel = course ? (course.title ?? course.name ?? course.id) : (t.course_id ?? "—");
                 const attempts = attemptsByTest[t.id] || 0;
                 const maxAttempts = typeof t.max_attempts === "number" ? t.max_attempts : null;
                 const pass = typeof t.pass_score === "number" ? t.pass_score : null;
@@ -129,7 +127,6 @@ export default async function TestsPage({ params }: { params: Promise<{ orgId: s
                 return (
                   <tr key={t.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-6 py-4 font-medium">{title}</td>
-                    <td className="px-6 py-4 text-muted-foreground">{courseLabel}</td>
                     <td className="px-6 py-4">{maxAttempts ? `${attempts} / ${maxAttempts}` : attempts}</td>
                     <td className="px-6 py-4">{pass ?? "—"}</td>
                     <td className="px-6 py-4">
@@ -144,7 +141,8 @@ export default async function TestsPage({ params }: { params: Promise<{ orgId: s
               })
             )}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
     </div>
   );

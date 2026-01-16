@@ -24,22 +24,28 @@
 .DS_Store
 Thumbs.db
 *.pem
+desktop.ini
 
 # database dumps / backups (never commit real data)
 /backup.sql
 /backup*.sql
+prod_*.sql
+dev_*.sql
 
 # private docs
 README_FULL.md
+INSTRUCTIONS.md
 
 # IDEs / editors
 .idea/
 .vscode/
+.cursor/
 
 # logs / caches
 *.log
 .eslintcache
 .turbo/
+error.log
 
 # debug
 npm-debug.log*
@@ -57,6 +63,16 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Supabase CLI (local project + temp artifacts)
-# Ignored because it can contain local metadata (e.g. pooler URL, project ref).
-/supabase/
+# Supabase CLI generated files
+supabase/.temp/
+supabase/.branches/
+supabase/cli-latest
+supabase/gotrue-version
+supabase/pooler-url
+supabase/postgres-version
+supabase/project-ref
+supabase/rest-version
+supabase/storage-migration
+supabase/storage-version
+supabase/*.tmp
+.supabase/

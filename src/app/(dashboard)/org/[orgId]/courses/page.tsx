@@ -107,9 +107,9 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <BookOpen className="h-8 w-8 text-primary" />
+          <BookOpen className="h-8 w-8 text-primary shrink-0" />
           <div>
             <h1 className="text-2xl font-bold text-foreground">Courses</h1>
             <p className="text-muted-foreground">Your Journey Begins with a Single Lesson.</p>
@@ -117,7 +117,7 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
         </div>
 
         {user.role === "organization_admin" && user.organization_id === orgId ? (
-          <Button asChild>
+          <Button asChild className="shrink-0">
             <Link href={`/org/${orgSlug}/courses/new`}>
               <Plus className="h-4 w-4" />
               Create course

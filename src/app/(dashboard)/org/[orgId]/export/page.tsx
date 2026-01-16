@@ -141,15 +141,15 @@ export default async function OrgExportPage({
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <Download className="h-8 w-8 text-primary" />
+          <Download className="h-8 w-8 text-primary shrink-0" />
           <div>
             <h1 className="text-2xl font-bold text-foreground">Export Data</h1>
             <p className="text-muted-foreground">Export your organization&apos;s data</p>
           </div>
         </div>
-        <Button variant="outline" className="gap-2" disabled title="Coming soon">
+        <Button variant="outline" className="gap-2 shrink-0" disabled title="Coming soon">
           <Calendar className="h-4 w-4" />
           Schedule Export
         </Button>
@@ -244,8 +244,9 @@ export default async function OrgExportPage({
             No export history yet. Your CSV exports will appear here after you download them above.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <>
+            <div className="w-full overflow-x-auto">
+              <table className="min-w-max w-full">
               <thead className="bg-muted/50 border-b">
                 <tr>
                   <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Timestamp</th>
@@ -268,8 +269,9 @@ export default async function OrgExportPage({
                   );
                 })}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+          </>
         )}
 
         {/* Pagination */}

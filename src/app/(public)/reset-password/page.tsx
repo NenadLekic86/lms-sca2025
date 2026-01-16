@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
-import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -233,74 +233,86 @@ export default function ResetPasswordPage() {
   }
 
   return (
-    <DashboardLayout centered>
-      <div className="w-full max-w-md space-y-6">
-        <div className="text-center space-y-2">
-          <h1 className="text-3xl font-bold text-foreground">Reset password</h1>
-          <p className="text-muted-foreground">
-            Choose a new password for your account.
-          </p>
-        </div>
+    <div className="min-h-screen bg-background">
+      {/* Simple header */}
+      <header className="border-b py-4 px-6">
+        <Link 
+          href="/" 
+          className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft size={16} />
+          Back to Login
+        </Link>
+      </header>
 
-        {error && (
-          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+      {/* Form content */}
+      <main className="flex items-center justify-center px-6 py-12">
+        <div className="w-full max-w-md space-y-6">
+          <div className="text-center space-y-2">
+            <h1 className="text-3xl font-bold text-foreground">Reset password</h1>
+            <p className="text-muted-foreground">
+              Choose a new password for your account.
+            </p>
           </div>
-        )}
 
-        <div className="rounded-lg border bg-card p-6">
-          {!isReady ? (
-            <div className="text-sm text-muted-foreground">Preparing reset...</div>
-          ) : !hasSession ? (
-            <div className="space-y-3 text-sm">
-              <p className="text-muted-foreground">
-                This reset link is invalid or expired. Please request a new one.
-              </p>
-              <div className="flex gap-2">
-                <Button asChild variant="outline">
-                  <Link href="/forgot-password">Request new link</Link>
-                </Button>
-                <Button asChild>
-                  <Link href="/">Back to login</Link>
-                </Button>
-              </div>
+          {error && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
             </div>
-          ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="password">New password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  autoComplete="new-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isSaving}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Confirm new password</Label>
-                <Input
-                  id="confirmPassword"
-                  type="password"
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  disabled={isSaving}
-                  required
-                />
-              </div>
-
-              <Button className="w-full" type="submit" disabled={isSaving}>
-                {isSaving ? "Saving..." : "Update password"}
-              </Button>
-            </form>
           )}
+
+          <div className="rounded-lg border bg-card p-6">
+            {!isReady ? (
+              <div className="text-sm text-muted-foreground">Preparing reset...</div>
+            ) : !hasSession ? (
+              <div className="space-y-3 text-sm">
+                <p className="text-muted-foreground">
+                  This reset link is invalid or expired. Please request a new one.
+                </p>
+                <div className="flex gap-2">
+                  <Button asChild variant="outline">
+                    <Link href="/forgot-password">Request new link</Link>
+                  </Button>
+                  <Button asChild>
+                    <Link href="/">Back to login</Link>
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="password">New password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    disabled={isSaving}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="confirmPassword">Confirm new password</Label>
+                  <Input
+                    id="confirmPassword"
+                    type="password"
+                    autoComplete="new-password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    disabled={isSaving}
+                    required
+                  />
+                </div>
+
+                <Button className="w-full" type="submit" disabled={isSaving}>
+                  {isSaving ? "Saving..." : "Update password"}
+                </Button>
+              </form>
+            )}
+          </div>
         </div>
-      </div>
-    </DashboardLayout>
+      </main>
+    </div>
   );
 }
-
-

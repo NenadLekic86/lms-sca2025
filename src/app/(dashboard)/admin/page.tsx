@@ -596,7 +596,7 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 min-[1024px]:grid-cols-3 min-[1440px]:grid-cols-5 gap-4">
         {stats.map((stat) => {
           const Icon = stat.icon;
           return (
@@ -641,8 +641,9 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
           </div>
         ) : (
           <>
-            <div className="overflow-hidden rounded-lg border">
-              <table className="w-full">
+            <div className="rounded-lg border">
+              <div className="w-full overflow-x-auto">
+                <table className="min-w-max w-full">
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="text-left px-4 py-3 text-sm font-medium text-muted-foreground">Time</th>
@@ -671,7 +672,8 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
                     </tr>
                   ))}
                 </tbody>
-              </table>
+                </table>
+              </div>
             </div>
 
             <div className="mt-4 flex items-center justify-between gap-3 text-sm">

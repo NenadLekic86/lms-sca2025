@@ -515,15 +515,15 @@ export default async function AuditLogsPage({
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <FileText className="h-8 w-8 text-primary" />
+          <FileText className="h-8 w-8 text-primary shrink-0" />
           <div>
             <h1 className="text-2xl font-bold text-foreground">Audit Logs</h1>
             <p className="text-muted-foreground">Track all system activities and changes</p>
           </div>
         </div>
-        <Button variant="outline" className="flex items-center gap-2" asChild>
+        <Button variant="outline" className="flex items-center gap-2 shrink-0" asChild>
           <a href="/api/audit/export?max=50000">
             <Download size={18} />
             Export Logs
@@ -539,7 +539,8 @@ export default async function AuditLogsPage({
 
       {/* Audit Logs Table */}
       <div className="bg-card border rounded-lg shadow-sm overflow-hidden">
-        <table className="w-full">
+        <div className="w-full overflow-x-auto">
+          <table className="min-w-max w-full">
           <thead className="bg-muted/50">
             <tr>
               <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Timestamp</th>
@@ -584,7 +585,8 @@ export default async function AuditLogsPage({
               ))
             )}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
 
       <p className="text-sm text-muted-foreground">

@@ -155,15 +155,15 @@ export default async function OrgReportsPage({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <BarChart3 className="h-8 w-8 text-primary" />
+          <BarChart3 className="h-8 w-8 text-primary shrink-0" />
           <div>
             <h1 className="text-2xl font-bold text-foreground">Reports</h1>
             <p className="text-muted-foreground">Analytics and reports for your organization</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0">
           <Button className="gap-2" asChild>
             <a href={exportHref}>
               <Download className="h-4 w-4" />
@@ -307,8 +307,9 @@ export default async function OrgReportsPage({
       <div className="bg-card border rounded-lg p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-foreground mb-4">Enrollments</h2>
 
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full">
+        <div className="rounded-lg border">
+          <div className="w-full overflow-x-auto">
+            <table className="min-w-max w-full">
             <thead className="bg-muted/50 border-b">
               <tr>
                 <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">User</th>
@@ -362,7 +363,8 @@ export default async function OrgReportsPage({
                 })
               )}
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
 
         <div className="mt-4 flex items-center justify-between gap-3 text-sm">

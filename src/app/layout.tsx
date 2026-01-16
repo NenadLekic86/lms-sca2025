@@ -6,6 +6,10 @@ import "@/styles/globals.css";
 import "@/styles/theme.css";
 import { PUBLIC_APP_SETTINGS_THEME_TAG, THEME_CACHE_KEY } from "@/lib/theme/themeConstants";
 import { env } from "@/env.mjs";
+import { ClientErrorLogger } from "@/components/errors/ClientErrorLogger";
+import { initServerErrorLogging } from "@/lib/logging/serverErrorBootstrap";
+
+initServerErrorLogging();
 
 function sanitizeCssValue(value: string): string {
   // Prevent breaking out of the <style> tag if someone ever stores unsafe strings in theme values.
@@ -108,6 +112,7 @@ export default async function RootLayout({
       >
         <ThemeProvider>
           <AuthProvider>
+            <ClientErrorLogger />
             {children}
             <Toaster position="top-right" richColors closeButton />
           </AuthProvider>

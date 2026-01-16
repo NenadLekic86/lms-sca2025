@@ -8,7 +8,7 @@ import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 
 export const fetchCache = "force-no-store";
 
-type CourseRow = { id: string; title: string | null };
+type CourseRow = { id: string; title: string | null; name?: string | null };
 type TestRow = {
   id: string;
   title: string | null;
@@ -56,7 +56,7 @@ export default async function StudentMyTestsPage({ params }: { params: Promise<{
     .filter((v): v is string => typeof v === "string");
 
   const { data: coursesData } = courseIds.length
-    ? await supabase.from("courses").select("id, title").in("id", courseIds)
+    ? await supabase.from("courses").select("id, title, name").in("id", courseIds)
     : { data: [] };
 
   const courseMap = new Map<string, CourseRow>();
@@ -181,10 +181,10 @@ export default async function StudentMyTestsPage({ params }: { params: Promise<{
       </div>
 
       <div className="bg-card border rounded-lg shadow-sm overflow-hidden">
-        <table className="w-full">
+        <div className="w-full overflow-x-auto">
+          <table className="min-w-max w-full">
           <thead className="bg-muted/50 border-b">
             <tr>
-              <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Test</th>
               <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Course</th>
               <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Score</th>
               <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Status</th>
@@ -200,8 +200,6 @@ export default async function StudentMyTestsPage({ params }: { params: Promise<{
               </tr>
             ) : (
               tests.map((t) => {
-                const course = courseMap.get(t.course_id);
-                const courseLabel = (course?.title ?? "").trim() || t.course_id;
                 const latest = latestByTest[t.id] ?? null;
                 const statusInfo = getStatusInfo({ latest, maxAttempts: t.max_attempts, passScore: t.pass_score });
                 const attemptsUsed = (attemptsByTest[t.id] || []).length;
@@ -222,7 +220,6 @@ export default async function StudentMyTestsPage({ params }: { params: Promise<{
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-muted-foreground">{courseLabel}</td>
                     <td className="px-6 py-4">
                       {typeof latest?.score === "number" && latest.submitted_at ? (
                         <div>
@@ -253,7 +250,8 @@ export default async function StudentMyTestsPage({ params }: { params: Promise<{
               })
             )}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
     </div>
   );

@@ -68,7 +68,8 @@ export default async function CertificatesPage() {
 
       {/* Certificates Table */}
       <div className="bg-card border rounded-lg shadow-sm overflow-hidden">
-        <table className="w-full">
+        <div className="w-full overflow-x-auto">
+          <table className="min-w-max w-full">
           <thead className="bg-muted/50">
             <tr>
               <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">User</th>
@@ -133,7 +134,8 @@ export default async function CertificatesPage() {
               })
             )}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
     </div>
   );

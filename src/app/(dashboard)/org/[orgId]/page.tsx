@@ -371,8 +371,9 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
               <p className="text-sm mt-2">Once users enroll, course progress will show here.</p>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-lg border">
-              <table className="w-full">
+            <div className="rounded-lg border">
+              <div className="w-full overflow-x-auto">
+                <table className="min-w-max w-full">
                 <thead className="bg-muted/50 border-b">
                   <tr>
                     <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Course</th>
@@ -413,7 +414,8 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
                     );
                   })}
                 </tbody>
-              </table>
+                </table>
+              </div>
             </div>
           )}
         </div>
@@ -437,8 +439,9 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
               <p className="text-sm mt-2">Enrollments, test submissions and certificates will appear here.</p>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-lg border">
-              <table className="w-full">
+            <div className="rounded-lg border">
+              <div className="w-full overflow-x-auto">
+                <table className="min-w-max w-full">
                 <thead className="bg-muted/50 border-b">
                   <tr>
                     <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Time</th>
@@ -471,7 +474,8 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
                     );
                   })}
                 </tbody>
-              </table>
+                </table>
+              </div>
             </div>
           )}
         </div>
