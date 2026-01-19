@@ -1,4 +1,5 @@
 import { BarChart3, Users, BookOpen, Award, TrendingUp } from "lucide-react";
+import Link from "next/link";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
 import { ReportFiltersClient } from "@/features/reporting/components/ReportFiltersClient";
@@ -394,7 +395,7 @@ export default async function SystemReportsPage({
                       </Button>
                     ) : (
                       <Button asChild variant="outline">
-                        <a href={pageHref(current - 1)}>Prev</a>
+                        <Link href={pageHref(current - 1)}>Prev</Link>
                       </Button>
                     )}
 
@@ -410,7 +411,7 @@ export default async function SystemReportsPage({
                           </Button>
                         ) : (
                           <Button key={p} asChild variant="outline">
-                            <a href={pageHref(p)}>{p}</a>
+                            <Link href={pageHref(p)}>{p}</Link>
                           </Button>
                         )
                       )}
@@ -426,7 +427,7 @@ export default async function SystemReportsPage({
                       </Button>
                     ) : (
                       <Button asChild variant="outline">
-                        <a href={pageHref(current + 1)}>Next</a>
+                        <Link href={pageHref(current + 1)}>Next</Link>
                       </Button>
                     )}
                   </>

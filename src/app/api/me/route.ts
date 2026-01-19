@@ -8,6 +8,8 @@ type MeResponse = {
     email: string;
     role: string;
     organization_id: string | null;
+    organization_name?: string | null;
+    organization_slug?: string | null;
     full_name: string | null;
     avatar_url?: string | null;
   };
@@ -39,12 +41,37 @@ export async function GET() {
   const { user: caller, error } = await getServerUser();
   if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // Best-effort org display fields (avoid relying on RLS by using admin client,
+  // but only for the caller's own org id).
+  let organization_name: string | null = null;
+  let organization_slug: string | null = null;
+  if (caller.organization_id) {
+    try {
+      const admin = createAdminSupabaseClient();
+      const { data: org, error: orgErr } = await admin
+        .from("organizations")
+        .select("name, slug")
+        .eq("id", caller.organization_id)
+        .maybeSingle();
+      if (!orgErr && org) {
+        const rawName = (org as { name?: unknown }).name;
+        const rawSlug = (org as { slug?: unknown }).slug;
+        organization_name = typeof rawName === "string" && rawName.trim().length ? rawName.trim() : null;
+        organization_slug = typeof rawSlug === "string" && rawSlug.trim().length ? rawSlug.trim() : null;
+      }
+    } catch {
+      // ignore (best-effort)
+    }
+  }
+
   return NextResponse.json({
     user: {
       id: caller.id,
       email: caller.email,
       role: caller.role,
       organization_id: caller.organization_id,
+      organization_name,
+      organization_slug,
       full_name: (caller.full_name ?? null) as string | null,
       avatar_url: ((caller as { avatar_url?: unknown } | null)?.avatar_url ?? null) as string | null,
     },

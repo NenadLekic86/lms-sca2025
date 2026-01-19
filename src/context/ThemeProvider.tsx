@@ -2,7 +2,7 @@
 
 import { createContext, useEffect, useState } from "react";
 import { loadAppTheme } from '@/lib/theme/loadTheme';
-import { THEME_CACHE_KEY } from "@/lib/theme/themeConstants";
+import { ROLE_PRIMARY_CACHE_KEY, THEME_CACHE_KEY } from "@/lib/theme/themeConstants";
 
 type ThemeContextType = {
   theme: Record<string, string> | null;
@@ -17,7 +17,22 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     function applyThemeVars(themeVars: Record<string, string>) {
+      // If a role-based primary override is cached, never clobber it with the public theme.
+      // This prevents visible "primary color bouncing" during dashboard navigations.
+      // We scope this to dashboard routes so a stale cache can't affect public pages.
+      let rolePrimary: string | null = null;
+      let isDashboardRoute = false;
+      try {
+        const p = window.location?.pathname ?? "";
+        isDashboardRoute = p.startsWith("/admin") || p.startsWith("/system") || p.startsWith("/org");
+        rolePrimary = isDashboardRoute ? localStorage.getItem(ROLE_PRIMARY_CACHE_KEY) : null;
+      } catch {
+        rolePrimary = null;
+        isDashboardRoute = false;
+      }
+
       Object.entries(themeVars).forEach(([key, value]) => {
+        if (isDashboardRoute && key === "--brand-primary" && rolePrimary) return;
         document.documentElement.style.setProperty(key, value);
       });
       setTheme(themeVars);

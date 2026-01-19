@@ -6,6 +6,10 @@ import { DashboardSidebarClient } from "./DashboardSidebarClient";
 export async function DashboardSidebar() {
   const { user } = await getServerUser();
 
+  if (!user?.role) {
+    return null;
+  }
+
   let menuItems: NavItem[] = [];
   let canLogout = false;
 

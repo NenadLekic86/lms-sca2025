@@ -1,4 +1,5 @@
 import { Download, FileSpreadsheet, FileText, Calendar, Building2, Users, BookOpen, Award } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { redirect } from "next/navigation";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
@@ -362,7 +363,7 @@ export default async function SystemExportPage({
                       </Button>
                     ) : (
                       <Button asChild variant="outline">
-                        <a href={exportsHref(exportsCurrent - 1)}>Prev</a>
+                        <Link href={exportsHref(exportsCurrent - 1)}>Prev</Link>
                       </Button>
                     )}
 
@@ -378,7 +379,7 @@ export default async function SystemExportPage({
                           </Button>
                         ) : (
                           <Button key={p} asChild variant="outline">
-                            <a href={exportsHref(p)}>{p}</a>
+                            <Link href={exportsHref(p)}>{p}</Link>
                           </Button>
                         )
                       )}
@@ -390,7 +391,7 @@ export default async function SystemExportPage({
                       </Button>
                     ) : (
                       <Button asChild variant="outline">
-                        <a href={exportsHref(exportsCurrent + 1)}>Next</a>
+                        <Link href={exportsHref(exportsCurrent + 1)}>Next</Link>
                       </Button>
                     )}
                   </>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AsyncIdCombobox } from "@/features/reporting/components/AsyncIdCombobox";
@@ -22,20 +23,48 @@ export function ReportFiltersClient(props: {
   };
 }) {
   const { mode, orgIdFixed, initial } = props;
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const onSubmit = useCallback(
+    (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      const form = e.currentTarget;
+      const fd = new FormData(form);
+
+      // Always reset pagination on filter apply.
+      // Keep the URL as the single source of truth (server components read searchParams).
+      const params = new URLSearchParams();
+      for (const [k, v] of fd.entries()) {
+        if (typeof v !== "string") continue;
+        const val = v.trim();
+        if (!val) continue;
+
+        // Keep URLs tidy (server defaults to these anyway).
+        if (k === "result" && val === "all") continue;
+        if (k === "page" && val === "1") continue;
+
+        params.set(k, val);
+      }
+      // Explicitly reset pagination to page 1 on apply.
+      params.set("page", "1");
+
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname);
+    },
+    [router, pathname]
+  );
+
   const reset = useCallback(() => {
     // Clear query params by navigating to the same path.
-    try {
-      window.location.href = window.location.pathname;
-    } catch {
-      // ignore
-    }
-  }, []);
+    router.replace(pathname);
+  }, [router, pathname]);
 
   return (
     <div className="bg-card border rounded-lg p-6 shadow-sm">
       <h2 className="text-lg font-semibold text-foreground mb-4">Filters</h2>
 
-      <form method="get" className="space-y-4">
+      <form onSubmit={onSubmit} className="space-y-4">
         {/* Any filter change should reset pagination */}
         <input type="hidden" name="page" value="1" />
 

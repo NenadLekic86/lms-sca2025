@@ -4,10 +4,11 @@ import { Toaster } from "@/components/ui/sonner";
 import Script from "next/script";
 import "@/styles/globals.css";
 import "@/styles/theme.css";
-import { PUBLIC_APP_SETTINGS_THEME_TAG, THEME_CACHE_KEY } from "@/lib/theme/themeConstants";
+import { PUBLIC_APP_SETTINGS_THEME_TAG, ROLE_PRIMARY_CACHE_KEY, THEME_CACHE_KEY } from "@/lib/theme/themeConstants";
 import { env } from "@/env.mjs";
 import { ClientErrorLogger } from "@/components/errors/ClientErrorLogger";
 import { initServerErrorLogging } from "@/lib/logging/serverErrorBootstrap";
+import { RolePrimaryThemeOverride } from "@/components/theme/RolePrimaryThemeOverride";
 
 initServerErrorLogging();
 
@@ -89,9 +90,12 @@ export default async function RootLayout({
   // Pre-hydration theme initializer:
   // - Applies cached theme from localStorage before React hydrates (prevents flash on repeat visits).
   // - Server-inlined <style> below handles first-time visitors (no cache yet).
+  // - Also applies cached role-based primary override (reduces flicker after login).
   const preHydrationThemeScript = `(function(){try{var raw=localStorage.getItem(${JSON.stringify(
     THEME_CACHE_KEY
-  )});if(!raw)return;var obj=JSON.parse(raw);if(!obj||typeof obj!=="object")return;for(var k in obj){if(!Object.prototype.hasOwnProperty.call(obj,k))continue;var v=obj[k];if(typeof v!=="string")continue;if(k.indexOf("--")!==0)continue;document.documentElement.style.setProperty(k,v);} }catch(e){}})();`;
+  )});if(raw){var obj=JSON.parse(raw);if(obj&&typeof obj==="object"){for(var k in obj){if(!Object.prototype.hasOwnProperty.call(obj,k))continue;var v=obj[k];if(typeof v!=="string")continue;if(k.indexOf("--")!==0)continue;document.documentElement.style.setProperty(k,v);}}}var rp=localStorage.getItem(${JSON.stringify(
+    ROLE_PRIMARY_CACHE_KEY
+  )});var p=(typeof location!=="undefined"&&location&&typeof location.pathname==="string")?location.pathname:"";var dash=p.indexOf("/admin")===0||p.indexOf("/system")===0||p.indexOf("/org")===0;if(dash&&rp&&typeof rp==="string"&&rp.length){document.documentElement.style.setProperty("--brand-primary",rp);} }catch(e){}})();`;
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -113,6 +117,7 @@ export default async function RootLayout({
         <ThemeProvider>
           <AuthProvider>
             <ClientErrorLogger />
+            <RolePrimaryThemeOverride />
             {children}
             <Toaster position="top-right" richColors closeButton />
           </AuthProvider>

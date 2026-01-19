@@ -1,4 +1,5 @@
 import { LayoutDashboard, Building2, Users, BookOpen, Award, FileText } from "lucide-react";
+import Link from "next/link";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
 
@@ -701,7 +702,7 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
                         </Button>
                       ) : (
                         <Button asChild variant="outline">
-                          <a href={activityHref(activityCurrent - 1)}>Prev</a>
+                          <Link href={activityHref(activityCurrent - 1)}>Prev</Link>
                         </Button>
                       )}
 
@@ -717,7 +718,7 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
                             </Button>
                           ) : (
                             <Button key={p} asChild variant="outline">
-                              <a href={activityHref(p)}>{p}</a>
+                              <Link href={activityHref(p)}>{p}</Link>
                             </Button>
                           )
                         )}
@@ -729,7 +730,7 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
                         </Button>
                       ) : (
                         <Button asChild variant="outline">
-                          <a href={activityHref(activityCurrent + 1)}>Next</a>
+                          <Link href={activityHref(activityCurrent + 1)}>Next</Link>
                         </Button>
                       )}
                     </>

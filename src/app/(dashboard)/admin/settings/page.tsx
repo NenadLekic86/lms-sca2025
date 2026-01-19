@@ -37,6 +37,7 @@ export default function SystemSettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [isDraggingLogo, setIsDraggingLogo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -185,6 +186,21 @@ export default function SystemSettingsPage() {
     }
   }
 
+  function handleLogoDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingLogo(false);
+    if (isUploadingLogo || isLoading) return;
+
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Please drop an image file.");
+      return;
+    }
+    void handleLogoSelected(file);
+  }
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -235,27 +251,78 @@ export default function SystemSettingsPage() {
             <div>
               <Label htmlFor="logoUrl">Logo URL</Label>
               <div className="mt-1 flex items-center gap-4">
-                <div className="relative h-16 w-32 bg-muted rounded flex items-center justify-center text-muted-foreground text-sm overflow-hidden">
-                  {logoUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={logoUrl} alt="Current logo" className="h-full w-full object-contain" />
-                  ) : (
-                    (appName ? appName : "No Logo")
-                  )}
+                <div
+                  className={`relative flex min-h-20 w-full flex-1 items-center gap-4 rounded border border-dashed px-4 py-3 text-sm transition ${
+                    isDraggingLogo ? "border-primary bg-primary/10" : "border-muted-foreground/30 bg-muted/40"
+                  }`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (!isUploadingLogo && !isLoading) setIsDraggingLogo(true);
+                  }}
+                  onDragLeave={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setIsDraggingLogo(false);
+                  }}
+                  onDrop={handleLogoDrop}
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Drop logo image or click to upload"
+                  onClick={() => {
+                    if (isUploadingLogo || isLoading) return;
+                    logoInputRef.current?.click();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      if (isUploadingLogo || isLoading) return;
+                      logoInputRef.current?.click();
+                    }
+                  }}
+                >
+                  <div className="relative h-16 w-32 bg-background rounded flex items-center justify-center text-muted-foreground text-sm overflow-hidden border">
+                    {logoUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={logoUrl} alt="Current logo" className="h-full w-full object-contain" />
+                    ) : (
+                      (appName ? appName : "No Logo")
+                    )}
 
-                  {logoUrl ? (
-                    <button
-                      type="button"
-                      className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/75"
-                      title="Remove logo (clears URL)"
-                      onClick={() => {
-                        setLogoUrl("");
-                        setSuccess("Logo removed (not saved). Click Save Changes to persist.");
-                      }}
-                    >
-                      <X size={14} />
-                    </button>
-                  ) : null}
+                    {logoUrl ? (
+                      <button
+                        type="button"
+                        className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/75"
+                        title="Remove logo (clears URL)"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setLogoUrl("");
+                          setSuccess("Logo removed (not saved). Click Save Changes to persist.");
+                        }}
+                      >
+                        <X size={14} />
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="flex-1 text-muted-foreground">
+                    <p className="font-medium text-foreground">Drag & drop a logo here</p>
+                    <p className="text-xs">PNG, WEBP, or SVG. Click to browse.</p>
+                  </div>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isLoading || isUploadingLogo}
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      logoInputRef.current?.click();
+                    }}
+                  >
+                    <Upload size={16} className="mr-2" />
+                    {isUploadingLogo ? "Uploading..." : "Upload New"}
+                  </Button>
                 </div>
 
                 <input
@@ -272,17 +339,6 @@ export default function SystemSettingsPage() {
                     e.currentTarget.value = "";
                   }}
                 />
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={isLoading || isUploadingLogo}
-                  type="button"
-                  onClick={() => logoInputRef.current?.click()}
-                >
-                  <Upload size={16} className="mr-2" />
-                  {isUploadingLogo ? "Uploading..." : "Upload New"}
-                </Button>
               </div>
               <Input
                 id="logoUrl"

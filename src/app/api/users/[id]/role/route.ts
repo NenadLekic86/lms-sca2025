@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerSupabaseClient, getServerUser } from '@/lib/supabase/server';
+import { createAdminSupabaseClient, getServerUser } from '@/lib/supabase/server';
 import { changeRoleSchema, validateSchema } from '@/lib/validations/schemas';
 
 /**
@@ -36,8 +36,19 @@ export async function PATCH(
       );
     }
 
-    // 3. Parse and validate request body with zod
+    // 3. Parse request body
     const body = await request.json().catch(() => null);
+
+    // 3.25 Safety: if system_admin attempts to assign super_admin, return 403 (even if schema changes later).
+    // Note: current changeRoleSchema already rejects super_admin for everyone.
+    if (caller.role === "system_admin" && body && typeof body === "object" && (body as { role?: unknown }).role === "super_admin") {
+      return NextResponse.json(
+        { error: "Forbidden: system_admin cannot assign super_admin role" },
+        { status: 403 }
+      );
+    }
+
+    // 3.5 Validate request body with zod
     const validation = validateSchema(changeRoleSchema, body);
     
     if (!validation.success) {
@@ -50,9 +61,9 @@ export async function PATCH(
     const { role: newRole } = validation.data;
 
     // 4. Load target user to check if they're super_admin
-    const supabase = await createServerSupabaseClient();
-
-    const { data: targetUser, error: targetUserError } = await supabase
+    // NOTE: use admin client to bypass RLS safely (route already enforces caller permissions).
+    const admin = createAdminSupabaseClient();
+    const { data: targetUser, error: targetUserError } = await admin
       .from('users')
       .select('id, role')
       .eq('id', targetUserId)
@@ -81,7 +92,8 @@ export async function PATCH(
     }
 
     // 6. Call the RPC to change role
-    const { error: rpcError } = await supabase.rpc('change_user_role', {
+    // Use admin client so the RPC is not blocked by RLS policies.
+    const { error: rpcError } = await admin.rpc('change_user_role', {
       p_user_id: targetUserId,
       p_new_role: newRole,
     });

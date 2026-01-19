@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { BarChart3, Download, Users, BookOpen, Award, TrendingUp } from "lucide-react";
+import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
@@ -395,7 +396,7 @@ export default async function OrgReportsPage({
                     </Button>
                   ) : (
                     <Button asChild variant="outline">
-                      <a href={pageHref(current - 1)}>Prev</a>
+                      <Link href={pageHref(current - 1)}>Prev</Link>
                     </Button>
                   )}
 
@@ -411,7 +412,7 @@ export default async function OrgReportsPage({
                         </Button>
                       ) : (
                         <Button key={p} asChild variant="outline">
-                          <a href={pageHref(p)}>{p}</a>
+                          <Link href={pageHref(p)}>{p}</Link>
                         </Button>
                       )
                     )}
@@ -427,7 +428,7 @@ export default async function OrgReportsPage({
                     </Button>
                   ) : (
                     <Button asChild variant="outline">
-                      <a href={pageHref(current + 1)}>Next</a>
+                      <Link href={pageHref(current + 1)}>Next</Link>
                     </Button>
                   )}
                 </>

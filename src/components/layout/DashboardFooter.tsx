@@ -1,7 +1,11 @@
 import Link from "next/link";
 import { Facebook, Twitter, Linkedin } from "lucide-react";
+import { getServerUser } from "@/lib/supabase/server";
 
-export function DashboardFooter() {
+export async function DashboardFooter() {
+  const { user } = await getServerUser();
+  if (!user) return null;
+
   return (
     <footer className="border-t py-4 px-6 bg-background">
       <div className="flex items-center justify-between">

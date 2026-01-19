@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminSupabaseClient, getServerUser, createServerSupabaseClient } from "@/lib/supabase/server";
+import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { env } from "@/env.mjs";
 
 type UserRole = "super_admin" | "system_admin" | "organization_admin" | "member";
@@ -40,15 +40,22 @@ export async function POST(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const supabase = await createServerSupabaseClient();
-    const { data: target, error: targetError } = await supabase
+    // Anti-enumeration: fail fast for obviously disallowed callers (and don't leak if target exists).
+    if ((caller.role as UserRole) === "member") {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    // NOTE: use admin client to bypass RLS safely (route enforces permissions below).
+    const admin = createAdminSupabaseClient();
+    const { data: target, error: targetError } = await admin
       .from("users")
       .select("id, email, role, organization_id")
       .eq("id", targetUserId)
       .single();
 
     if (targetError || !target) {
-      return NextResponse.json({ error: "Target user not found" }, { status: 404 });
+      // Anti-enumeration: don't reveal whether the target user exists.
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
     const targetRole = target.role as UserRole;
@@ -56,10 +63,10 @@ export async function POST(
 
     const allowed = canResendInvite(caller.role as UserRole, caller.organization_id ?? null, targetRole, targetOrgId);
     if (!allowed.ok) {
-      return NextResponse.json({ error: allowed.reason }, { status: 403 });
+      // Anti-enumeration: don't reveal whether the target user exists or is simply not allowed.
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const admin = createAdminSupabaseClient();
     const appUrl = env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
 
     const { error: sendError } = await admin.auth.resetPasswordForEmail(target.email, {
