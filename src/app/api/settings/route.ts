@@ -1,8 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { createAdminSupabaseClient, getServerUser } from '@/lib/supabase/server';
 import { revalidateTag } from "next/cache";
 import { PUBLIC_APP_SETTINGS_THEME_TAG } from "@/lib/theme/themeConstants";
 import { updateSettingsSchema, validateSchema } from '@/lib/validations/schemas';
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 type PublicAppSettings = {
   id: string;
@@ -29,11 +31,22 @@ function parseTheme(theme: unknown): Record<string, string> | null {
   return null;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   // super_admin only
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (caller.role !== 'super_admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
+  if (caller.role !== 'super_admin') return apiError("FORBIDDEN", "Forbidden", { status: 403 });
 
   const admin = createAdminSupabaseClient();
   const { data, error: settingsError } = await admin
@@ -42,34 +55,53 @@ export async function GET() {
     .single();
 
   if (settingsError) {
-    return NextResponse.json({ error: settingsError.message }, { status: 500 });
+    return apiError("INTERNAL", "Failed to load settings.", { status: 500 });
   }
 
   const settings = data as PublicAppSettings;
-  return NextResponse.json({
-    settings: {
-      ...settings,
-      theme: parseTheme(settings.theme) ?? {},
+  return apiOk(
+    {
+      settings: {
+        ...settings,
+        theme: parseTheme(settings.theme) ?? {},
+      },
     },
-  });
+    { status: 200 }
+  );
 }
 
 export async function PATCH(request: NextRequest) {
   // super_admin only
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (caller.role !== 'super_admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
+  if (caller.role !== 'super_admin') {
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+  }
 
   // Parse body
   const body = await request.json().catch(() => null);
   if (!body || typeof body !== 'object') {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Invalid JSON body." });
+    return apiError("VALIDATION_ERROR", "Invalid JSON body.", { status: 400 });
   }
 
   // Validate with zod (partial validation - settings can update any subset of fields)
   const validation = validateSchema(updateSettingsSchema, body);
   if (!validation.success) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: validation.error });
+    return apiError("VALIDATION_ERROR", validation.error, { status: 400 });
   }
 
   const validatedData = validation.data;
@@ -83,7 +115,16 @@ export async function PATCH(request: NextRequest) {
     .single();
 
   if (currentError || !current) {
-    return NextResponse.json({ error: currentError?.message || 'Settings row not found' }, { status: 500 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to load settings.",
+      internalMessage: currentError?.message || "Settings row not found",
+    });
+    return apiError("INTERNAL", "Failed to load settings.", { status: 500 });
   }
 
   const currentSettings = current as PublicAppSettings;
@@ -130,10 +171,16 @@ export async function PATCH(request: NextRequest) {
     : currentSettings.logo_url;
 
   if (!nextAppName && !nextLogoUrl) {
-    return NextResponse.json(
-      { error: 'Branding invalid: you must provide at least app_name or logo_url' },
-      { status: 400 }
-    );
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 400,
+      code: "VALIDATION_ERROR",
+      publicMessage: "You must provide at least app_name or logo_url.",
+      internalMessage: "branding invalid: app_name and logo_url both empty",
+    });
+    return apiError("VALIDATION_ERROR", "You must provide at least app_name or logo_url.", { status: 400 });
   }
 
   const { data: updated, error: updateError } = await admin
@@ -144,7 +191,16 @@ export async function PATCH(request: NextRequest) {
     .single();
 
   if (updateError || !updated) {
-    return NextResponse.json({ error: updateError?.message || 'Failed to update settings' }, { status: 500 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to update settings.",
+      internalMessage: updateError?.message || "no updated row returned",
+    });
+    return apiError("INTERNAL", "Failed to update settings.", { status: 500 });
   }
 
   // Best-effort audit log
@@ -174,11 +230,22 @@ export async function PATCH(request: NextRequest) {
     // Best-effort; do not block success.
   }
 
-  return NextResponse.json({
-    message: 'Settings updated',
-    settings: {
-      ...updatedSettings,
-      theme: parseTheme(updatedSettings.theme) ?? {},
-    },
+  await logApiEvent({
+    request,
+    caller,
+    outcome: "success",
+    status: 200,
+    publicMessage: "Settings updated.",
+    details: { patch_keys: Object.keys(body as Record<string, unknown>) },
   });
+
+  return apiOk(
+    {
+      settings: {
+        ...updatedSettings,
+        theme: parseTheme(updatedSettings.theme) ?? {},
+      },
+    },
+    { status: 200, message: "Settings updated." }
+  );
 }

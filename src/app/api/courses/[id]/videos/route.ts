@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { validateSchema } from "@/lib/validations/schemas";
 import { z } from "zod";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -70,10 +72,21 @@ async function tryOEmbed(url: string): Promise<{
   }
 }
 
-export async function GET(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   const supabase = await createServerSupabaseClient();
   const { data, error: loadError } = await supabase
@@ -82,23 +95,36 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
     .eq("course_id", id)
     .order("created_at", { ascending: false });
 
-  if (loadError) return NextResponse.json({ error: loadError.message }, { status: 500 });
-  return NextResponse.json({ videos: Array.isArray(data) ? data : [] }, { status: 200 });
+  if (loadError) return apiError("INTERNAL", "Failed to load videos.", { status: 500 });
+  return apiOk({ videos: Array.isArray(data) ? data : [] }, { status: 200 });
 }
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const body = await request.json().catch(() => null);
   const validation = validateSchema(addVideoSchema, body);
   if (!validation.success) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: validation.error });
+    return apiError("VALIDATION_ERROR", validation.error, { status: 400 });
   }
 
   const url = validation.data.url;
@@ -111,12 +137,13 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     .single();
 
   if (courseError || !courseRow) {
-    return NextResponse.json({ error: courseError?.message || "Course not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Course not found.", { status: 404 });
   }
 
   if (caller.role === "organization_admin") {
     if (!caller.organization_id || courseRow.organization_id !== caller.organization_id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
   }
 
@@ -138,7 +165,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     .single();
 
   if (insertError || !inserted) {
-    return NextResponse.json({ error: insertError?.message || "Failed to save video" }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to save video.", internalMessage: insertError?.message });
+    return apiError("INTERNAL", "Failed to save video.", { status: 500 });
   }
 
   // Best-effort audit log
@@ -156,6 +184,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     // ignore
   }
 
-  return NextResponse.json({ video: inserted }, { status: 201 });
+  await logApiEvent({ request, caller, outcome: "success", status: 201, publicMessage: "Video added.", details: { course_id: id, ok: Boolean(oembed.embed_url) } });
+  return apiOk({ video: inserted }, { status: 201, message: "Video added." });
 }
 

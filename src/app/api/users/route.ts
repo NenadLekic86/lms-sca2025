@@ -1,5 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from '@/lib/supabase/server';
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 type RpcUserRow = {
   id: string;
@@ -28,19 +30,22 @@ export async function GET(request: NextRequest) {
     const { user: caller, error: authError } = await getServerUser();
     
     if (authError || !caller) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      await logApiEvent({
+        request,
+        caller: null,
+        outcome: "error",
+        status: 401,
+        code: "UNAUTHORIZED",
+        publicMessage: "Unauthorized",
+        internalMessage: typeof authError === "string" ? authError : "No authenticated user",
+      });
+      return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
     }
 
     // 2. Check if caller has permission to view users
     const allowedRoles = ['super_admin', 'system_admin', 'organization_admin'];
     if (!allowedRoles.includes(caller.role)) {
-      return NextResponse.json(
-        { error: 'Forbidden: insufficient permissions' },
-        { status: 403 }
-      );
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
 
     // 3. Call appropriate RPC based on role
@@ -57,10 +62,7 @@ export async function GET(request: NextRequest) {
 
     if (result.error) {
       console.error('RPC error:', result.error);
-      return NextResponse.json(
-        { error: 'Failed to fetch users' },
-        { status: 500 }
-      );
+      return apiError("INTERNAL", "Failed to fetch users.", { status: 500 });
     }
 
     // Optional server-side org filter (useful for /org/[orgId]/users even for super/system admins)
@@ -129,17 +131,17 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ 
-      users: visibleToCaller,
-      caller_role: caller.role 
-    });
+    return apiOk(
+      {
+        users: visibleToCaller,
+        caller_role: caller.role,
+      },
+      { status: 200 }
+    );
 
   } catch (error) {
     console.error('GET /api/users error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return apiError("INTERNAL", "Internal server error.", { status: 500 });
   }
 }
 

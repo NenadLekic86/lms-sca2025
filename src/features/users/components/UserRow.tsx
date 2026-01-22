@@ -6,6 +6,7 @@ import type { Role } from '@/types';
 import { useEffect, useState } from 'react';
 import type { Organization } from '@/features/organizations';
 import { roleLabel } from "@/lib/utils/roleLabel";
+import { toast } from "sonner";
 
 interface UserRowProps {
   user: ApiUser;
@@ -17,11 +18,11 @@ interface UserRowProps {
   canSelect?: boolean;
   onToggleSelect?: (userId: string, nextSelected: boolean) => void;
   bulkMode?: boolean;
-  onAssignOrganization?: (userId: string, organizationId: string) => Promise<void>;
-  onChangeRole: (userId: string, newRole: Role) => Promise<void>;
-  onDisable: (userId: string) => Promise<void>;
-  onEnable: (userId: string) => Promise<void>;
-  onPasswordSetupLink: (userId: string) => Promise<void>;
+  onAssignOrganization?: (userId: string, organizationId: string) => Promise<{ message?: string }>;
+  onChangeRole: (userId: string, newRole: Role) => Promise<{ message?: string }>;
+  onDisable: (userId: string) => Promise<{ message?: string }>;
+  onEnable: (userId: string) => Promise<{ message?: string }>;
+  onPasswordSetupLink: (userId: string) => Promise<{ message?: string }>;
 }
 
 export const UserRow = ({
@@ -74,7 +75,14 @@ export const UserRow = ({
   })();
 
   // For the super_admin row: no role change, no resend, no disable/enable.
-  const canSendSetupLink = !!callerRole && callerRole !== "member" && !isTargetSuperAdmin;
+  const canSendSetupLink = (() => {
+    if (!callerRole) return false;
+    if (callerRole === "member") return false;
+    if (callerRole === "super_admin") return true; // can send to anyone, including super_admin
+    if (callerRole === "system_admin") return user.role !== "super_admin";
+    if (callerRole === "organization_admin") return user.role === "member" || user.role === "organization_admin";
+    return false;
+  })();
   const canEditRole = !!callerRole && (callerRole === "super_admin" || callerRole === "system_admin") && !isTargetSuperAdmin;
   const canAssignOrg =
     !!callerRole &&
@@ -162,8 +170,12 @@ export const UserRow = ({
                 disabled={isSaving || bulkMode}
                 onClick={async () => {
                   setIsSaving(true);
+                  const t = toast.loading("Saving role…");
                   try {
-                    await onChangeRole(user.id, selectedRole);
+                    const res = await onChangeRole(user.id, selectedRole);
+                    toast.success(res.message || "Role updated.", { id: t });
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Failed to update role", { id: t });
                   } finally {
                     setIsSaving(false);
                   }
@@ -204,8 +216,12 @@ export const UserRow = ({
                 onClick={async () => {
                   if (!selectedOrgId) return;
                   setIsAssigningOrg(true);
+                  const t = toast.loading("Assigning organization…");
                   try {
-                    await onAssignOrganization(user.id, selectedOrgId);
+                    const res = await onAssignOrganization(user.id, selectedOrgId);
+                    toast.success(res.message || "Organization assigned.", { id: t });
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Failed to assign organization", { id: t });
                   } finally {
                     setIsAssigningOrg(false);
                   }
@@ -246,11 +262,12 @@ export const UserRow = ({
                 disabled={isResending || bulkMode}
                 onClick={async () => {
                   setIsResending(true);
+                  const t = toast.loading("Sending setup link…");
                   try {
-                    await onPasswordSetupLink(user.id);
-                    alert("Setup link sent.");
+                    const res = await onPasswordSetupLink(user.id);
+                    toast.success(res.message || "Setup link sent.", { id: t });
                   } catch (e) {
-                    alert(e instanceof Error ? e.message : "Failed to send setup link");
+                    toast.error(e instanceof Error ? e.message : "Failed to send setup link", { id: t });
                   } finally {
                     setIsResending(false);
                   }
@@ -269,8 +286,12 @@ export const UserRow = ({
                 onClick={async () => {
                   if (!confirm('Disable this user? They will no longer be able to log in.')) return;
                   setIsDisabling(true);
+                  const t = toast.loading("Disabling user…");
                   try {
-                    await onDisable(user.id);
+                    const res = await onDisable(user.id);
+                    toast.success(res.message || "User disabled.", { id: t });
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Failed to disable user", { id: t });
                   } finally {
                     setIsDisabling(false);
                   }
@@ -287,8 +308,12 @@ export const UserRow = ({
                 onClick={async () => {
                   if (!confirm("Enable this user? They will be able to log in again.")) return;
                   setIsEnabling(true);
+                  const t = toast.loading("Enabling user…");
                   try {
-                    await onEnable(user.id);
+                    const res = await onEnable(user.id);
+                    toast.success(res.message || "User enabled.", { id: t });
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Failed to enable user", { id: t });
                   } finally {
                     setIsEnabling(false);
                   }

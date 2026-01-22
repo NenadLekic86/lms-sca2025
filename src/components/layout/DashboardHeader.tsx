@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppBranding from "../ui/AppBranding";
 import { ROLE_PRIMARY_CACHE_KEY } from "@/lib/theme/themeConstants";
+import { fetchJson } from "@/lib/api";
 
 type NotificationItem = {
   id: string;
@@ -145,15 +146,11 @@ export function DashboardHeader() {
     setNotifLoading(true);
     setNotifError(null);
     try {
-      const res = await fetch("/api/notifications", { cache: "no-store" });
-      const body = (await res.json().catch(() => ({}))) as {
-        unreadCount?: number;
-        notifications?: NotificationItem[];
-        error?: string;
-      };
-      if (!res.ok) throw new Error(body.error || "Failed to load notifications");
-      setUnreadCount(typeof body.unreadCount === "number" ? body.unreadCount : 0);
-      setNotifications(Array.isArray(body.notifications) ? body.notifications : []);
+      const { data } = await fetchJson<{ unreadCount: number; notifications: NotificationItem[] }>("/api/notifications", {
+        cache: "no-store",
+      });
+      setUnreadCount(typeof data.unreadCount === "number" ? data.unreadCount : 0);
+      setNotifications(Array.isArray(data.notifications) ? data.notifications : []);
     } catch (e) {
       setNotifError(e instanceof Error ? e.message : "Failed to load notifications");
     } finally {
@@ -165,13 +162,11 @@ export function DashboardHeader() {
     if (!user) return;
     const payload = input.all ? { all: true } : { notification_id: input.notificationId };
 
-    const res = await fetch("/api/notifications/read", {
+    await fetchJson<{ ok: true }>("/api/notifications/read", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    if (!res.ok) throw new Error(body.error || "Failed to mark as read");
   }
 
   // Initial load + light polling (keeps badge fresh without realtime).

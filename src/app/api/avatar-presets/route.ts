@@ -1,15 +1,27 @@
-import { NextResponse } from "next/server";
 import { getServerUser } from "@/lib/supabase/server";
 import path from "path";
 import { readdir } from "fs/promises";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
 const PRESETS_DIR = path.join(process.cwd(), "public", "avatars", "presets");
 
-export async function GET() {
+export async function GET(request: Request) {
   const { user, error } = await getServerUser();
-  if (error || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !user) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   try {
     const files = await readdir(PRESETS_DIR, { withFileTypes: true });
@@ -20,12 +32,9 @@ export async function GET() {
       .sort((a, b) => a.localeCompare(b))
       .map((name) => ({ name, url: `/avatars/presets/${name}` }));
 
-    return NextResponse.json({ presets });
-  } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Failed to load avatar presets" },
-      { status: 500 }
-    );
+    return apiOk({ presets }, { status: 200 });
+  } catch {
+    return apiError("INTERNAL", "Failed to load avatar presets.", { status: 500 });
   }
 }
 

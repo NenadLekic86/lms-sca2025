@@ -1,4 +1,7 @@
 import type { Role } from '@/types';
+import { fetchJson } from "@/lib/api";
+
+type ApiResult<T> = T & { message?: string };
 
 // Types for API responses
 export interface ApiUser {
@@ -21,36 +24,31 @@ export interface GetUsersResponse {
 }
 
 export interface InviteUserResponse {
-  message: string;
   user: ApiUser;
 }
 
 export interface ChangeRoleResponse {
-  message: string;
   user_id: string;
   new_role: Role;
 }
 
 export interface DisableUserResponse {
-  message: string;
   user_id: string;
 }
 
 export interface EnableUserResponse {
-  message: string;
   user_id: string;
 }
 
 export interface ResendInviteResponse {
-  message: string;
+  ok: true;
 }
 
 export interface PasswordSetupLinkResponse {
-  message: string;
+  ok: true;
 }
 
 export interface AssignOrganizationResponse {
-  message: string;
   user_id: string;
   organization_id: string;
 }
@@ -67,14 +65,8 @@ export const usersApi = {
    */
   async getUsers(organizationId?: string): Promise<GetUsersResponse> {
     const url = organizationId ? `/api/users?organization_id=${encodeURIComponent(organizationId)}` : '/api/users';
-    const response = await fetch(url);
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to fetch users');
-    }
-    
-    return response.json();
+    const { data } = await fetchJson<GetUsersResponse>(url);
+    return data;
   },
 
   /**
@@ -88,8 +80,8 @@ export const usersApi = {
     role: Role, 
     organizationId?: string | null,
     fullName?: string | null
-  ): Promise<InviteUserResponse> {
-    const response = await fetch('/api/users/invite', {
+  ): Promise<ApiResult<InviteUserResponse>> {
+    const { data, message } = await fetchJson<InviteUserResponse>('/api/users/invite', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -99,13 +91,7 @@ export const usersApi = {
         organization_id: organizationId 
       }),
     });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to invite user');
-    }
-    
-    return response.json();
+    return { ...data, message };
   },
 
   /**
@@ -116,101 +102,57 @@ export const usersApi = {
   async changeUserRole(
     userId: string, 
     newRole: Role
-  ): Promise<ChangeRoleResponse> {
-    const response = await fetch(`/api/users/${userId}/role`, {
+  ): Promise<ApiResult<ChangeRoleResponse>> {
+    const { data, message } = await fetchJson<ChangeRoleResponse>(`/api/users/${userId}/role`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ role: newRole }),
     });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to change user role');
-    }
-    
-    return response.json();
+    return { ...data, message };
   },
 
   /**
    * Disable a user (soft delete via RPC)
    * @param userId - Target user ID
    */
-  async disableUser(userId: string): Promise<DisableUserResponse> {
-    const response = await fetch(`/api/users/${userId}/disable`, {
-      method: 'PATCH',
-    });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to disable user');
-    }
-    
-    return response.json();
+  async disableUser(userId: string): Promise<ApiResult<DisableUserResponse>> {
+    const { data, message } = await fetchJson<DisableUserResponse>(`/api/users/${userId}/disable`, { method: "PATCH" });
+    return { ...data, message };
   },
 
   /**
    * Enable a user (reactivate)
    */
-  async enableUser(userId: string): Promise<EnableUserResponse> {
-    const response = await fetch(`/api/users/${userId}/enable`, {
-      method: "PATCH",
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || "Failed to enable user");
-    }
-
-    return response.json();
+  async enableUser(userId: string): Promise<ApiResult<EnableUserResponse>> {
+    const { data, message } = await fetchJson<EnableUserResponse>(`/api/users/${userId}/enable`, { method: "PATCH" });
+    return { ...data, message };
   },
 
   /**
    * Resend an invite email to a user.
    */
-  async resendInvite(userId: string): Promise<ResendInviteResponse> {
-    const response = await fetch(`/api/users/${userId}/resend-invite`, {
-      method: "POST",
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || "Failed to resend invite");
-    }
-
-    return response.json();
+  async resendInvite(userId: string): Promise<ApiResult<ResendInviteResponse>> {
+    const { data, message } = await fetchJson<ResendInviteResponse>(`/api/users/${userId}/resend-invite`, { method: "POST" });
+    return { ...data, message };
   },
 
   /**
    * Send a password setup link (recovery email) to a user.
    */
-  async sendPasswordSetupLink(userId: string): Promise<PasswordSetupLinkResponse> {
-    const response = await fetch(`/api/users/${userId}/password-setup`, {
-      method: "POST",
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || "Failed to send password setup link");
-    }
-
-    return response.json();
+  async sendPasswordSetupLink(userId: string): Promise<ApiResult<PasswordSetupLinkResponse>> {
+    const { data, message } = await fetchJson<PasswordSetupLinkResponse>(`/api/users/${userId}/password-setup`, { method: "POST" });
+    return { ...data, message };
   },
 
   /**
    * Assign/reassign an organization_admin to an organization.
    */
-  async assignOrganization(userId: string, organizationId: string): Promise<AssignOrganizationResponse> {
-    const response = await fetch(`/api/users/${userId}/organization`, {
+  async assignOrganization(userId: string, organizationId: string): Promise<ApiResult<AssignOrganizationResponse>> {
+    const { data, message } = await fetchJson<AssignOrganizationResponse>(`/api/users/${userId}/organization`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ organization_id: organizationId }),
     });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || "Failed to assign organization");
-    }
-
-    return response.json();
+    return { ...data, message };
   },
 };

@@ -1,9 +1,9 @@
-import { NextResponse } from "next/server";
 import { appendErrorLog, isLocalErrorLoggingEnabled } from "@/lib/logging/errorLogger";
+import { apiOk } from "@/lib/api/response";
 
 export async function POST(req: Request) {
   if (!isLocalErrorLoggingEnabled()) {
-    return NextResponse.json({ ok: true });
+    return apiOk({ ok: true }, { status: 200 });
   }
 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
@@ -13,5 +13,5 @@ export async function POST(req: Request) {
     ...((body && typeof body === "object") ? body : { message: "Invalid client error payload" }),
   });
 
-  return NextResponse.json({ ok: true });
+  return apiOk({ ok: true }, { status: 200 });
 }

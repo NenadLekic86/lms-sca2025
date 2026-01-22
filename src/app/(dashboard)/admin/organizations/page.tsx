@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useMemo, useState } from "react";
 import { CreateOrganizationForm, useOrganizations } from "@/features/organizations";
+import { toast } from "sonner";
 
 export default function OrganizationsPage() {
   const { organizations, countsErrors, isLoading, error, createOrganization, disableOrganization, enableOrganization } = useOrganizations();
@@ -44,8 +45,14 @@ export default function OrganizationsPage() {
         <div className="bg-card border rounded-lg p-6 shadow-sm">
           <CreateOrganizationForm
             onCreate={async (input) => {
-              await createOrganization(input);
-              setIsCreateOpen(false);
+              const t = toast.loading("Creating organization…");
+              try {
+                const res = await createOrganization(input);
+                toast.success(res.message || "Organization created.", { id: t });
+                setIsCreateOpen(false);
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Failed to create organization", { id: t });
+              }
             }}
           />
         </div>
@@ -136,8 +143,12 @@ export default function OrganizationsPage() {
                         onClick={async () => {
                           if (!confirm("Enable this organization? Users in it will be able to log in again.")) return;
                           setTogglingOrgId(org.id);
+                          const t = toast.loading("Enabling organization…");
                           try {
-                            await enableOrganization(org.id);
+                            const res = await enableOrganization(org.id);
+                            toast.success(res.message || "Organization enabled.", { id: t });
+                          } catch (e) {
+                            toast.error(e instanceof Error ? e.message : "Failed to enable organization", { id: t });
                           } finally {
                             setTogglingOrgId(null);
                           }
@@ -154,8 +165,12 @@ export default function OrganizationsPage() {
                         onClick={async () => {
                           if (!confirm("Disable this organization? This will disable ALL users in it immediately.")) return;
                           setTogglingOrgId(org.id);
+                          const t = toast.loading("Disabling organization…");
                           try {
-                            await disableOrganization(org.id);
+                            const res = await disableOrganization(org.id);
+                            toast.success(res.message || "Organization disabled.", { id: t });
+                          } catch (e) {
+                            toast.error(e instanceof Error ? e.message : "Failed to disable organization", { id: t });
                           } finally {
                             setTogglingOrgId(null);
                           }

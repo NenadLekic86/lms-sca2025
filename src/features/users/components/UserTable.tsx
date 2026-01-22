@@ -10,6 +10,7 @@ import type { UserFormData } from '../validations/user.schema';
 import type { Role } from '@/types';
 import { useOrganizations } from '@/features/organizations';
 import { roleLabel } from "@/lib/utils/roleLabel";
+import { toast } from "sonner";
 
 export const UserTable = ({
   organizationId,
@@ -141,8 +142,14 @@ export const UserTable = ({
         : data.organization_id ?? null;
 
     const fullName = typeof data.full_name === "string" ? data.full_name.trim() : "";
-    await inviteUser(data.email, data.role, effectiveOrgId, fullName.length ? fullName : null);
-    setIsFormOpen(false);
+    const t = toast.loading("Inviting user…");
+    try {
+      const res = await inviteUser(data.email, data.role, effectiveOrgId, fullName.length ? fullName : null);
+      toast.success(res.message || "User invited.", { id: t });
+      setIsFormOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to invite user", { id: t });
+    }
   };
 
   if (isLoading) {
@@ -383,19 +390,24 @@ export const UserTable = ({
                     });
                   }}
                   onAssignOrganization={async (userId, orgId) => {
-                    await assignOrganization(userId, orgId);
+                    const res = await assignOrganization(userId, orgId);
+                    return { message: res.message };
                   }}
                   onChangeRole={async (userId, newRole) => {
-                    await changeUserRole(userId, newRole);
+                    const res = await changeUserRole(userId, newRole);
+                    return { message: res.message };
                   }}
                   onDisable={async (userId) => {
-                    await disableUser(userId);
+                    const res = await disableUser(userId);
+                    return { message: res.message };
                   }}
                   onEnable={async (userId) => {
-                    await enableUser(userId);
+                    const res = await enableUser(userId);
+                    return { message: res.message };
                   }}
                   onPasswordSetupLink={async (userId) => {
-                    await sendPasswordSetupLink(userId);
+                    const res = await sendPasswordSetupLink(userId);
+                    return { message: res.message };
                   }}
                 />
               ))
@@ -425,14 +437,14 @@ export const UserTable = ({
             const result = await bulkAssignOrganization(ids, bulkTargetOrgId);
 
             if (result.failureCount === 0) {
-              alert(`Moved ${result.successCount} user${result.successCount === 1 ? "" : "s"}.`);
+              toast.success(`Moved ${result.successCount} user${result.successCount === 1 ? "" : "s"}.`);
               setSelectedUserIds(new Set());
               setBulkTargetOrgId("");
               setBulkConfirmOpen(false);
               return;
             }
 
-            alert(
+            toast.error(
               `Moved ${result.successCount} user${result.successCount === 1 ? "" : "s"}. ` +
                 `${result.failureCount} failed. The failed users remain selected so you can retry.`
             );

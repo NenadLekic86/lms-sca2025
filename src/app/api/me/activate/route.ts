@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { emitNotificationToUsers } from "@/lib/notifications/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 /**
  * POST /api/me/activate
@@ -12,13 +13,25 @@ import { emitNotificationToUsers } from "@/lib/notifications/server";
  * - Never activates disabled users (is_active = false)
  * - Idempotent: if already active, returns success
  */
-export async function POST() {
+export async function POST(request: Request) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   // Disabled users should never be activated by onboarding.
   if (caller.is_active === false) {
-    return NextResponse.json({ error: "Forbidden: account disabled" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Account disabled." });
+    return apiError("FORBIDDEN", "Account disabled.", { status: 403 });
   }
 
   const supabase = await createServerSupabaseClient();
@@ -41,7 +54,8 @@ export async function POST() {
     const looksLikeNoRow =
       /0 rows|no rows|json object requested, multiple \\(or no\\) rows returned/i.test(msg);
     if (!looksLikeNoRow) {
-      return NextResponse.json({ error: updateError.message }, { status: 500 });
+      await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to record activation.", internalMessage: updateError.message });
+      return apiError("INTERNAL", "Failed to record activation.", { status: 500 });
     }
   }
 
@@ -115,12 +129,13 @@ export async function POST() {
     }
   }
 
-  return NextResponse.json(
+  await logApiEvent({ request, caller, outcome: "success", status: 200, publicMessage: "Activation recorded." });
+
+  return apiOk(
     {
-      message: "Activation recorded",
       user: data ?? null,
     },
-    { status: 200 }
+    { status: 200, message: "Activation recorded." }
   );
 }
 

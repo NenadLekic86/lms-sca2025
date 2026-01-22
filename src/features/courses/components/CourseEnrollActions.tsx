@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Loader2, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { fetchJson } from "@/lib/api";
 
 export function CourseEnrollActions({
   orgId,
@@ -30,11 +31,8 @@ export function CourseEnrollActions({
 
     setLoading(true);
     try {
-      const res = await fetch(`/api/courses/${courseId}/enroll`, { method: "POST" });
-      const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
-      if (!res.ok) throw new Error(body?.error || "Failed to enroll");
-
-      toast.success("Enrollment started.");
+      const { message } = await fetchJson<{ enrollment: unknown }>(`/api/courses/${courseId}/enroll`, { method: "POST" });
+      toast.success(message || "Enrollment started.");
       router.push(`/org/${orgId}/courses/${courseId}/learn`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to enroll");

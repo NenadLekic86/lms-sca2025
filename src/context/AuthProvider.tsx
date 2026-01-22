@@ -3,15 +3,16 @@
 import { createContext, useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { User } from "@supabase/supabase-js";
+import type { Role } from "@/types";
 
-// User role type
-export type UserRole = 'super_admin' | 'system_admin' | 'organization_admin' | 'member';
+// User role type (single source of truth)
+export type UserRole = Role;
 
 // Database user info
 export interface DbUser {
   id: string;
   email: string;
-  role: UserRole;
+  role: Role;
   organization_id: string | null;
   organization_slug?: string | null;
   is_active?: boolean | null;

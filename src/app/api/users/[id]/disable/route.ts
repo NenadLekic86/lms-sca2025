@@ -1,7 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { createAdminSupabaseClient, getServerUser } from '@/lib/supabase/server';
+import type { Role } from "@/types";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
-type UserRole = "super_admin" | "system_admin" | "organization_admin" | "member";
+type UserRole = Role;
 
 /**
  * PATCH /api/users/[id]/disable
@@ -24,18 +27,29 @@ export async function PATCH(
     const { user: caller, error: authError } = await getServerUser();
     
     if (authError || !caller) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      await logApiEvent({
+        request,
+        caller: null,
+        outcome: "error",
+        status: 401,
+        code: "UNAUTHORIZED",
+        publicMessage: "Unauthorized",
+        internalMessage: typeof authError === "string" ? authError : "No authenticated user",
+      });
+      return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
     }
 
     // 2. Prevent self-disabling (safety check)
     if (targetUserId === caller.id) {
-      return NextResponse.json(
-        { error: 'Cannot disable your own account' },
-        { status: 400 }
-      );
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 400,
+        code: "VALIDATION_ERROR",
+        publicMessage: "You can’t disable your own account.",
+      });
+      return apiError("VALIDATION_ERROR", "You can’t disable your own account.", { status: 400 });
     }
 
     // 3. Load target user for permission checks
@@ -48,7 +62,15 @@ export async function PATCH(
       .single();
 
     if (targetError || !target) {
-      return NextResponse.json({ error: "Target user not found" }, { status: 404 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 404,
+        code: "NOT_FOUND",
+        publicMessage: "User not found.",
+      });
+      return apiError("NOT_FOUND", "User not found.", { status: 404 });
     }
 
     const targetRole = (target.role as UserRole);
@@ -58,24 +80,68 @@ export async function PATCH(
 
     // super_admin is protected
     if (targetRole === "super_admin") {
-      return NextResponse.json({ error: "Forbidden: cannot disable super_admin" }, { status: 403 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Forbidden",
+        internalMessage: "attempted to disable super_admin",
+      });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
 
     // 4. Permission checks
     if (callerRole === "member") {
-      return NextResponse.json({ error: "Forbidden: insufficient permissions" }, { status: 403 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Forbidden",
+        internalMessage: "member cannot disable users",
+      });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
     if (callerRole === "system_admin" || callerRole === "super_admin") {
       // ok
     } else if (callerRole === "organization_admin") {
       if (targetRole !== "member") {
-        return NextResponse.json({ error: "Forbidden: org admins can only disable members" }, { status: 403 });
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 403,
+          code: "FORBIDDEN",
+          publicMessage: "Forbidden",
+          internalMessage: "org admin attempted to disable non-member",
+        });
+        return apiError("FORBIDDEN", "Forbidden", { status: 403 });
       }
       if (!callerOrgId || callerOrgId !== targetOrgId) {
-        return NextResponse.json({ error: "Forbidden: org mismatch" }, { status: 403 });
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 403,
+          code: "FORBIDDEN",
+          publicMessage: "Forbidden",
+          internalMessage: "org mismatch",
+        });
+        return apiError("FORBIDDEN", "Forbidden", { status: 403 });
       }
     } else {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Forbidden",
+      });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
 
     // 5. Update is_active using admin client (server-side only)
@@ -86,10 +152,16 @@ export async function PATCH(
       .eq("id", targetUserId);
 
     if (updateError) {
-      return NextResponse.json(
-        { error: updateError.message || "Failed to disable user" },
-        { status: 500 }
-      );
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 500,
+        code: "INTERNAL",
+        publicMessage: "Failed to disable user.",
+        internalMessage: updateError.message,
+      });
+      return apiError("INTERNAL", "Failed to disable user.", { status: 500 });
     }
 
     // Best-effort audit log
@@ -111,17 +183,37 @@ export async function PATCH(
       // ignore
     }
 
-    return NextResponse.json({
-      message: 'User disabled successfully',
-      user_id: targetUserId,
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "success",
+      status: 200,
+      publicMessage: "User disabled.",
+      details: { user_id: targetUserId },
     });
+
+    return apiOk({ user_id: targetUserId }, { status: 200, message: "User disabled." });
 
   } catch (error) {
     console.error('PATCH /api/users/[id]/disable error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    try {
+      const { user: caller } = await getServerUser();
+      if (caller) {
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 500,
+          code: "INTERNAL",
+          publicMessage: "Internal server error.",
+          internalMessage: msg,
+        });
+      }
+    } catch {
+      // ignore
+    }
+    return apiError("INTERNAL", "Internal server error.", { status: 500 });
   }
 }
 

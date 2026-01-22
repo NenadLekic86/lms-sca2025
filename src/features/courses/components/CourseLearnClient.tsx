@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { CheckCircle, FileText, PlayCircle, ExternalLink, ClipboardList } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { fetchJson } from "@/lib/api";
 
 type ResourceRow = {
   id: string;
@@ -83,13 +84,11 @@ export function CourseLearnClient({
     const key = `${item_type}:${item_id}`;
     setBusyKey(key);
     try {
-      const res = await fetch(`/api/courses/${courseId}/progress`, {
+      const { data: body } = await fetchJson<{ row: ProgressRow }>(`/api/courses/${courseId}/progress`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ item_type, item_id, completed }),
       });
-      const body = (await res.json().catch(() => null)) as { row?: ProgressRow; error?: string } | null;
-      if (!res.ok) throw new Error(body?.error || "Failed to update progress");
 
       // Merge the updated row into local state
       const row = body?.row ?? null;
@@ -109,9 +108,11 @@ export function CourseLearnClient({
   async function openPdf(resourceId: string) {
     setBusyKey(`resource-open:${resourceId}`);
     try {
-      const res = await fetch(`/api/courses/${courseId}/resources/${resourceId}/signed-url`, { cache: "no-store" });
-      const body = (await res.json().catch(() => null)) as { signedUrl?: string; error?: string } | null;
-      if (!res.ok || !body?.signedUrl) throw new Error(body?.error || "Failed to open resource");
+      const { data: body } = await fetchJson<{ signedUrl: string }>(
+        `/api/courses/${courseId}/resources/${resourceId}/signed-url`,
+        { cache: "no-store" }
+      );
+      if (!body?.signedUrl) throw new Error("Failed to open resource");
 
       window.open(body.signedUrl, "_blank", "noopener,noreferrer");
     } catch (e) {
@@ -128,9 +129,10 @@ export function CourseLearnClient({
         return;
       }
 
-      const res = await fetch(`/api/courses/${courseId}/test`, { cache: "no-store" });
-      const body = (await res.json().catch(() => null)) as { test?: { id?: string | null; is_published?: boolean | null } | null; error?: string };
-      if (!res.ok) throw new Error(body?.error || "Failed to load test");
+      const { data: body } = await fetchJson<{ test: { id?: string | null; is_published?: boolean | null } | null }>(
+        `/api/courses/${courseId}/test`,
+        { cache: "no-store" }
+      );
 
       const testId = body?.test?.id ?? null;
       if (!testId) {

@@ -1,6 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { assignOrganizationSchema, validateSchema } from "@/lib/validations/schemas";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 /**
  * PATCH /api/users/[id]/organization
@@ -17,18 +19,53 @@ export async function PATCH(
   try {
     const { id: userId } = await params;
     const { user: caller, error: authError } = await getServerUser();
-    if (authError || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (authError || !caller) {
+      await logApiEvent({
+        request,
+        caller: null,
+        outcome: "error",
+        status: 401,
+        code: "UNAUTHORIZED",
+        publicMessage: "Unauthorized",
+        internalMessage: typeof authError === "string" ? authError : "No authenticated user",
+      });
+      return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+    }
     if (!["super_admin", "system_admin"].includes(caller.role)) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Forbidden",
+      });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
     if (!userId || typeof userId !== "string") {
-      return NextResponse.json({ error: "Invalid user id" }, { status: 400 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 400,
+        code: "VALIDATION_ERROR",
+        publicMessage: "Invalid user id.",
+      });
+      return apiError("VALIDATION_ERROR", "Invalid user id.", { status: 400 });
     }
 
     const body = await request.json().catch(() => null);
     const validation = validateSchema(assignOrganizationSchema, body);
     if (!validation.success) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 400,
+        code: "VALIDATION_ERROR",
+        publicMessage: validation.error,
+      });
+      return apiError("VALIDATION_ERROR", validation.error, { status: 400 });
     }
 
     const { organization_id } = validation.data;
@@ -53,7 +90,15 @@ export async function PATCH(
       const msg = targetAttempt.error.message ?? "";
       const missingDisabledByOrg = /disabled_by_org/i.test(msg) && isMissingColumnError(msg);
       if (!missingDisabledByOrg) {
-        return NextResponse.json({ error: "User not found" }, { status: 404 });
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 404,
+          code: "NOT_FOUND",
+          publicMessage: "User not found.",
+        });
+        return apiError("NOT_FOUND", "User not found.", { status: 404 });
       }
 
       hasDisabledByOrgColumn = false;
@@ -64,7 +109,15 @@ export async function PATCH(
         .single();
 
       if (fallbackTarget.error || !fallbackTarget.data) {
-        return NextResponse.json({ error: "User not found" }, { status: 404 });
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 404,
+          code: "NOT_FOUND",
+          publicMessage: "User not found.",
+        });
+        return apiError("NOT_FOUND", "User not found.", { status: 404 });
       }
 
       target = fallbackTarget.data as unknown as Record<string, unknown>;
@@ -73,15 +126,41 @@ export async function PATCH(
     }
 
     if (!target) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 404,
+        code: "NOT_FOUND",
+        publicMessage: "User not found.",
+      });
+      return apiError("NOT_FOUND", "User not found.", { status: 404 });
     }
 
     const targetRole = (target as { role?: unknown }).role;
     if (targetRole === "super_admin") {
-      return NextResponse.json({ error: "Forbidden: super_admin cannot be modified" }, { status: 403 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Forbidden",
+        internalMessage: "attempted to reassign super_admin",
+      });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
     if (targetRole !== "organization_admin" && targetRole !== "member") {
-      return NextResponse.json({ error: "Forbidden: only organization_admin/member can be assigned to an organization" }, { status: 403 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Forbidden",
+        internalMessage: "target role is not org-scoped",
+      });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
 
     // Ensure org exists
@@ -92,7 +171,15 @@ export async function PATCH(
       .single();
 
     if (orgError || !org) {
-      return NextResponse.json({ error: "Organization not found" }, { status: 404 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 404,
+        code: "NOT_FOUND",
+        publicMessage: "Organization not found.",
+      });
+      return apiError("NOT_FOUND", "Organization not found.", { status: 404 });
     }
 
     const orgIsActive = (org as { is_active?: unknown }).is_active !== false;
@@ -133,7 +220,16 @@ export async function PATCH(
         /disabled_by_org/i.test(msg) && (/column/i.test(msg) || /does not exist/i.test(msg) || /schema cache/i.test(msg));
 
       if (!missingColumn) {
-        return NextResponse.json({ error: msg || "Failed to assign organization" }, { status: 500 });
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 500,
+          code: "INTERNAL",
+          publicMessage: "Failed to assign organization.",
+          internalMessage: msg || "unknown update error",
+        });
+        return apiError("INTERNAL", "Failed to assign organization.", { status: 500 });
       }
 
       // Fallback if disabled_by_org doesn't exist (preserve manual disables by never forcing is_active=true)
@@ -147,7 +243,16 @@ export async function PATCH(
         .eq("id", userId);
 
       if (fallback.error) {
-        return NextResponse.json({ error: fallback.error.message }, { status: 500 });
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 500,
+          code: "INTERNAL",
+          publicMessage: "Failed to assign organization.",
+          internalMessage: fallback.error.message,
+        });
+        return apiError("INTERNAL", "Failed to assign organization.", { status: 500 });
       }
     }
 
@@ -173,9 +278,35 @@ export async function PATCH(
       // ignore
     }
 
-    return NextResponse.json({ message: "Organization assigned", user_id: userId, organization_id });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "success",
+      status: 200,
+      publicMessage: "Organization assigned.",
+      details: { user_id: userId, organization_id },
+    });
+
+    return apiOk({ user_id: userId, organization_id }, { status: 200, message: "Organization assigned." });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Internal server error" }, { status: 500 });
+    const msg = e instanceof Error ? e.message : "Internal server error";
+    try {
+      const { user: caller } = await getServerUser();
+      if (caller) {
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 500,
+          code: "INTERNAL",
+          publicMessage: "Internal server error.",
+          internalMessage: msg,
+        });
+      }
+    } catch {
+      // ignore
+    }
+    return apiError("INTERNAL", "Internal server error.", { status: 500 });
   }
 }
 

@@ -39,7 +39,7 @@ export function useOrganizations(options?: { enabled?: boolean; includeCounts?: 
   const createOrganization = useCallback(async (input: { name: string; slug?: string }) => {
     const res = await organizationsApi.createOrganization(input);
     await fetchOrganizations();
-    return res.organization;
+    return res;
   }, [fetchOrganizations]);
 
   const disableOrganization = useCallback(async (orgId: string) => {

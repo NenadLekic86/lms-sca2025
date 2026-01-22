@@ -1,15 +1,29 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
-export async function POST(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   if (caller.role !== "member") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const session = await createServerSupabaseClient();
@@ -19,7 +33,8 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
   const { data: orgIdRaw } = await session.rpc("current_user_org");
   const orgId = typeof orgIdRaw === "string" ? orgIdRaw : caller.organization_id;
   if (!orgId) {
-    return NextResponse.json({ error: "Missing organization" }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Missing organization." });
+    return apiError("VALIDATION_ERROR", "Missing organization.", { status: 400 });
   }
 
   const { data: course, error: courseError } = await admin
@@ -29,13 +44,16 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
     .maybeSingle();
 
   if (courseError) {
-    return NextResponse.json({ error: courseError.message }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Invalid course.", internalMessage: courseError.message });
+    return apiError("VALIDATION_ERROR", "Invalid course.", { status: 400 });
   }
   if (!course?.id) {
-    return NextResponse.json({ error: "Course not found" }, { status: 404 });
+    await logApiEvent({ request, caller, outcome: "error", status: 404, code: "NOT_FOUND", publicMessage: "Course not found." });
+    return apiError("NOT_FOUND", "Course not found.", { status: 404 });
   }
   if (!course.is_published) {
-    return NextResponse.json({ error: "Course is not published" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "This course is not published yet." });
+    return apiError("FORBIDDEN", "This course is not published yet.", { status: 403 });
   }
 
   // Match DB policy visibility logic:
@@ -56,14 +74,16 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
       .maybeSingle();
 
     if (linkError) {
-      return NextResponse.json({ error: linkError.message }, { status: 400 });
+      await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Failed to check course access.", internalMessage: linkError.message });
+      return apiError("VALIDATION_ERROR", "Failed to check course access.", { status: 400 });
     }
 
     isAssigned = Boolean(link);
   }
 
   if (!isGlobal && !isOrgOwned && !isAssigned) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   // Already enrolled? (idempotent)
@@ -75,7 +95,8 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
     .maybeSingle();
 
   if (existing?.id) {
-    return NextResponse.json({ ok: true, enrollment: existing }, { status: 200 });
+    await logApiEvent({ request, caller, outcome: "success", status: 200, publicMessage: "Already enrolled.", details: { course_id: id } });
+    return apiOk({ enrollment: existing }, { status: 200, message: "Already enrolled." });
   }
 
   // Insert with the MEMBER session so RLS is enforced by `enrollments_member_insert_self`.
@@ -99,12 +120,17 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
         .eq("course_id", id)
         .eq("user_id", caller.id)
         .maybeSingle();
-      if (row?.id) return NextResponse.json({ ok: true, enrollment: row }, { status: 200 });
+      if (row?.id) {
+        await logApiEvent({ request, caller, outcome: "success", status: 200, publicMessage: "Already enrolled.", details: { course_id: id } });
+        return apiOk({ enrollment: row }, { status: 200, message: "Already enrolled." });
+      }
     }
 
-    return NextResponse.json({ error: insError?.message || "Failed to enroll" }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Failed to enroll.", internalMessage: insError?.message });
+    return apiError("VALIDATION_ERROR", "Failed to enroll.", { status: 400 });
   }
 
-  return NextResponse.json({ ok: true, enrollment: inserted }, { status: 201 });
+  await logApiEvent({ request, caller, outcome: "success", status: 201, publicMessage: "Enrollment started.", details: { course_id: id } });
+  return apiOk({ enrollment: inserted }, { status: 201, message: "Enrollment started." });
 }
 

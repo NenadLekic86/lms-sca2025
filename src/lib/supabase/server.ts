@@ -4,6 +4,7 @@ import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { env } from '@/env.mjs';
+import type { Role } from "@/types";
 
 /**
  * Server client with user's session (for authenticated operations)
@@ -53,12 +54,12 @@ export function createAdminSupabaseClient() {
   );
 }
 
-export type UserRole = 'super_admin' | 'system_admin' | 'organization_admin' | 'member';
+export type UserRole = Role;
 
 export interface DbUser {
   id: string;
   email: string;
-  role: UserRole;
+  role: Role;
   organization_id: string | null;
   is_active?: boolean | null;
   full_name?: string | null;

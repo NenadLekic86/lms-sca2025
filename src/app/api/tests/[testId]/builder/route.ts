@@ -1,8 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { validateSchema } from "@/lib/validations/schemas";
 import { z } from "zod";
 import crypto from "crypto";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -68,10 +70,21 @@ async function canManageTest(params: {
   return { ok: true as const, admin, testRow };
 }
 
-export async function GET(_request: NextRequest, context: { params: Promise<{ testId: string }> }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ testId: string }> }) {
   const { testId } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   // Use session client for reading so RLS works later for members.
   const supabase = await createServerSupabaseClient();
@@ -81,7 +94,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ te
     .eq("id", testId)
     .single();
 
-  if (testError || !test) return NextResponse.json({ error: testError?.message || "Test not found" }, { status: 404 });
+  if (testError || !test) return apiError("NOT_FOUND", "Test not found.", { status: 404 });
 
   const { data: questionsData, error: qError } = await supabase
     .from("test_questions")
@@ -89,7 +102,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ te
     .eq("test_id", testId)
     .order("position", { ascending: true });
 
-  if (qError) return NextResponse.json({ error: qError.message }, { status: 500 });
+  if (qError) return apiError("INTERNAL", "Failed to load test builder.", { status: 500 });
 
   const rawQuestions = (Array.isArray(questionsData) ? questionsData : []) as Array<Record<string, unknown>>;
   const questions: QuestionRow[] = rawQuestions
@@ -114,7 +127,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ te
       .in("question_id", questionIds)
       .order("position", { ascending: true });
 
-    if (oError) return NextResponse.json({ error: oError.message }, { status: 500 });
+    if (oError) return apiError("INTERNAL", "Failed to load test builder.", { status: 500 });
 
     optionsByQuestion = {};
     const rawOpts = (Array.isArray(opts) ? opts : []) as Array<Record<string, unknown>>;
@@ -138,20 +151,34 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ te
     })),
   }));
 
-  return NextResponse.json({ test, questions: builder }, { status: 200 });
+  return apiOk({ test, questions: builder }, { status: 200 });
 }
 
 export async function PUT(request: NextRequest, context: { params: Promise<{ testId: string }> }) {
   const { testId } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   const perm = await canManageTest({ caller, testId });
-  if (!perm.ok) return NextResponse.json({ error: perm.error }, { status: perm.status });
+  if (!perm.ok) return apiError(perm.status === 404 ? "NOT_FOUND" : "FORBIDDEN", perm.error, { status: perm.status });
 
   const body = await request.json().catch(() => null);
   const validation = validateSchema(builderSchema, body);
-  if (!validation.success) return NextResponse.json({ error: validation.error }, { status: 400 });
+  if (!validation.success) {
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: validation.error });
+    return apiError("VALIDATION_ERROR", validation.error, { status: 400 });
+  }
 
   const admin = perm.admin;
   const payload = validation.data;
@@ -162,12 +189,12 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ tes
       .from("tests")
       .update(payload.test)
       .eq("id", testId);
-    if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
+    if (tErr) return apiError("INTERNAL", "Failed to save assessment settings.", { status: 500 });
   }
 
   // Replace strategy: delete all questions (options cascade)
   const { error: delError } = await admin.from("test_questions").delete().eq("test_id", testId);
-  if (delError) return NextResponse.json({ error: delError.message }, { status: 500 });
+  if (delError) return apiError("INTERNAL", "Failed to save assessment.", { status: 500 });
 
   // Insert questions with server-generated IDs
   const questionsToInsert = payload.questions.map((q, idx) => ({
@@ -181,7 +208,7 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ tes
 
   if (questionsToInsert.length > 0) {
     const { error: insQErr } = await admin.from("test_questions").insert(questionsToInsert);
-    if (insQErr) return NextResponse.json({ error: insQErr.message }, { status: 500 });
+    if (insQErr) return apiError("INTERNAL", "Failed to save assessment.", { status: 500 });
 
     const optionsToInsert: Array<{
       id: string;
@@ -206,7 +233,7 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ tes
 
     if (optionsToInsert.length > 0) {
       const { error: insOErr } = await admin.from("test_question_options").insert(optionsToInsert);
-      if (insOErr) return NextResponse.json({ error: insOErr.message }, { status: 500 });
+      if (insOErr) return apiError("INTERNAL", "Failed to save assessment.", { status: 500 });
     }
   }
 
@@ -225,6 +252,7 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ tes
     // ignore
   }
 
-  return NextResponse.json({ ok: true }, { status: 200 });
+  await logApiEvent({ request, caller, outcome: "success", status: 200, publicMessage: "Assessment saved.", details: { test_id: testId, questions: payload.questions.length } });
+  return apiOk({ ok: true }, { status: 200, message: "Assessment saved." });
 }
 

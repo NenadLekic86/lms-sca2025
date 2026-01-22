@@ -1,10 +1,10 @@
 import { z } from 'zod';
+import { ROLES } from "@/types";
 
 // ============================================
 // SHARED ENUMS
 // ============================================
-export const roleEnum = z.enum(['super_admin', 'system_admin', 'organization_admin', 'member']);
-export type Role = z.infer<typeof roleEnum>;
+export const roleEnum = z.enum(ROLES);
 
 // ============================================
 // USER SCHEMAS

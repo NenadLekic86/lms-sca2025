@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import path from "path";
 import { access } from "fs/promises";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -44,16 +46,29 @@ function isSafeFileName(name: string): boolean {
 
 export async function POST(request: NextRequest) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   const body = await request.json().catch(() => null);
   const nameRaw = (body as { name?: unknown } | null)?.name;
   const name = typeof nameRaw === "string" ? nameRaw.trim() : "";
   if (!name || !isSafeFileName(name)) {
-    return NextResponse.json({ error: "Invalid preset name" }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Invalid preset name." });
+    return apiError("VALIDATION_ERROR", "Invalid preset name.", { status: 400 });
   }
   if (!/\.(png|webp|jpe?g|svg)$/i.test(name)) {
-    return NextResponse.json({ error: "Invalid preset file type" }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Invalid preset file type." });
+    return apiError("VALIDATION_ERROR", "Invalid preset file type.", { status: 400 });
   }
 
   // Ensure preset exists on disk
@@ -61,7 +76,8 @@ export async function POST(request: NextRequest) {
   try {
     await access(presetPath);
   } catch {
-    return NextResponse.json({ error: "Preset not found" }, { status: 404 });
+    await logApiEvent({ request, caller, outcome: "error", status: 404, code: "NOT_FOUND", publicMessage: "Preset not found." });
+    return apiError("NOT_FOUND", "Preset not found.", { status: 404 });
   }
 
   const admin = createAdminSupabaseClient();
@@ -74,7 +90,8 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (currentErr || !currentUser) {
-    return NextResponse.json({ error: "Failed to load profile" }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to load profile.", internalMessage: currentErr?.message });
+    return apiError("INTERNAL", "Failed to load profile.", { status: 500 });
   }
 
   const previousAvatarUrl = (currentUser as { avatar_url?: unknown }).avatar_url;
@@ -84,7 +101,8 @@ export async function POST(request: NextRequest) {
   const nextPath = `/avatars/presets/${name}`;
   const origin = getRequestOrigin(request);
   if (!origin) {
-    return NextResponse.json({ error: "Could not determine app origin for preset URL" }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to set preset avatar.", internalMessage: "Could not determine app origin" });
+    return apiError("INTERNAL", "Failed to set preset avatar.", { status: 500 });
   }
   const nextUrl = `${origin}${nextPath}`;
 
@@ -94,7 +112,8 @@ export async function POST(request: NextRequest) {
     .eq("id", caller.id);
 
   if (updateError) {
-    return NextResponse.json({ error: updateError.message || "Failed to set avatar preset" }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to set preset avatar.", internalMessage: updateError.message });
+    return apiError("INTERNAL", "Failed to set preset avatar.", { status: 500 });
   }
 
   if (previousPath) {
@@ -126,7 +145,16 @@ export async function POST(request: NextRequest) {
     // ignore
   }
 
-  return NextResponse.json({ message: "Avatar preset set", avatar_url: nextUrl }, { status: 200 });
+  await logApiEvent({
+    request,
+    caller,
+    outcome: "success",
+    status: 200,
+    publicMessage: "Avatar preset set.",
+    details: { avatar_url: nextUrl, preset_name: name },
+  });
+
+  return apiOk({ avatar_url: nextUrl }, { status: 200, message: "Avatar preset set." });
 }
 
 

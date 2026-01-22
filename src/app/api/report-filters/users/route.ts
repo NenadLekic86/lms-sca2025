@@ -1,5 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -10,9 +12,20 @@ function parseIntParam(v: string | null, fallback: number): number {
 
 export async function GET(request: NextRequest) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
   if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const url = new URL(request.url);
@@ -25,7 +38,7 @@ export async function GET(request: NextRequest) {
 
   let orgId: string | null = requestedOrgId;
   if (caller.role === "organization_admin") {
-    if (!caller.organization_id) return NextResponse.json({ error: "Missing organization" }, { status: 400 });
+    if (!caller.organization_id) return apiError("VALIDATION_ERROR", "Missing organization.", { status: 400 });
     // Org admins can only list their org.
     orgId = caller.organization_id;
   }
@@ -49,25 +62,28 @@ export async function GET(request: NextRequest) {
   }
 
   const { data, error: loadError, count } = await query;
-  if (loadError) return NextResponse.json({ error: loadError.message }, { status: 500 });
+  if (loadError) return apiError("INTERNAL", "Failed to load users.", { status: 500 });
 
   const users = Array.isArray(data)
     ? (data as Array<{ id: string; email?: string | null; full_name?: string | null; role?: string | null; organization_id?: string | null; is_active?: boolean | null }>)
     : [];
 
-  return NextResponse.json({
-    users,
-    items: users.map((u) => ({
-      id: u.id,
-      label:
-        (u.full_name && u.full_name.trim().length > 0 ? u.full_name.trim() : null) ??
-        (u.email && u.email.trim().length > 0 ? u.email.trim() : null) ??
-        "Unknown user",
-      meta: `${(u.email && u.email.trim().length > 0 ? u.email.trim() : "No email")} • ${u.role ?? "unknown"}${u.is_active === false ? " • disabled" : ""}`,
-    })),
-    page,
-    page_size: pageSize,
-    total: typeof count === "number" ? count : 0,
-  });
+  return apiOk(
+    {
+      users,
+      items: users.map((u) => ({
+        id: u.id,
+        label:
+          (u.full_name && u.full_name.trim().length > 0 ? u.full_name.trim() : null) ??
+          (u.email && u.email.trim().length > 0 ? u.email.trim() : null) ??
+          "Unknown user",
+        meta: `${(u.email && u.email.trim().length > 0 ? u.email.trim() : "No email")} • ${u.role ?? "unknown"}${u.is_active === false ? " • disabled" : ""}`,
+      })),
+      page,
+      page_size: pageSize,
+      total: typeof count === "number" ? count : 0,
+    },
+    { status: 200 }
+  );
 }
 

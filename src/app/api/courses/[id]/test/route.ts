@@ -1,5 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -14,10 +16,21 @@ type TestRow = {
   created_at: string | null;
 };
 
-export async function GET(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   // Session client so RLS can apply later if needed.
   const supabase = await createServerSupabaseClient();
@@ -29,7 +42,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
     .limit(1)
     .maybeSingle();
 
-  if (loadError) return NextResponse.json({ error: loadError.message }, { status: 500 });
+  if (loadError) return apiError("INTERNAL", "Failed to load test.", { status: 500 });
 
   let questionCount = 0;
   if (data?.id) {
@@ -40,16 +53,28 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
     questionCount = count ?? 0;
   }
 
-  return NextResponse.json({ test: (data as TestRow | null) ?? null, questionCount }, { status: 200 });
+  return apiOk({ test: (data as TestRow | null) ?? null, questionCount }, { status: 200 });
 }
 
-export async function POST(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const admin = createAdminSupabaseClient();
@@ -61,13 +86,15 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
     .single();
 
   if (courseError || !courseRow) {
-    return NextResponse.json({ error: courseError?.message || "Course not found" }, { status: 404 });
+    await logApiEvent({ request, caller, outcome: "error", status: 404, code: "NOT_FOUND", publicMessage: "Course not found.", internalMessage: courseError?.message });
+    return apiError("NOT_FOUND", "Course not found.", { status: 404 });
   }
 
   // Org admins can only create tests for org-owned courses
   if (caller.role === "organization_admin") {
     if (!caller.organization_id || courseRow.organization_id !== caller.organization_id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden", internalMessage: "org mismatch" });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
   }
 
@@ -81,7 +108,7 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
     .maybeSingle();
 
   if (existing) {
-    return NextResponse.json({ test: existing as TestRow }, { status: 200 });
+    return apiOk({ test: existing as TestRow }, { status: 200 });
   }
 
   const title = `${(courseRow.title ?? "Course").trim() || "Course"} Assessment`;
@@ -100,7 +127,8 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
     .single();
 
   if (insertError || !inserted) {
-    return NextResponse.json({ error: insertError?.message || "Failed to create test" }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to create test.", internalMessage: insertError?.message });
+    return apiError("INTERNAL", "Failed to create test.", { status: 500 });
   }
 
   // Best-effort audit log
@@ -118,6 +146,7 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
     // ignore
   }
 
-  return NextResponse.json({ test: inserted as TestRow }, { status: 201 });
+  await logApiEvent({ request, caller, outcome: "success", status: 201, publicMessage: "Assessment created.", details: { course_id: id, test_id: inserted.id } });
+  return apiOk({ test: inserted as TestRow }, { status: 201, message: "Assessment created." });
 }
 

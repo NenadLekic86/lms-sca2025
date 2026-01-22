@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { apiError, apiOk } from "@/lib/api/response";
 import { createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -24,9 +25,20 @@ type RecipientRow = {
   notifications?: NotificationRow | NotificationRow[] | null;
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   const supabase = await createServerSupabaseClient();
 
@@ -47,10 +59,10 @@ export async function GET() {
   ]);
 
   if (unreadRes.error) {
-    return NextResponse.json({ error: unreadRes.error.message }, { status: 500 });
+    return apiError("INTERNAL", "Failed to load notifications.", { status: 500 });
   }
   if (listRes.error) {
-    return NextResponse.json({ error: listRes.error.message }, { status: 500 });
+    return apiError("INTERNAL", "Failed to load notifications.", { status: 500 });
   }
 
   const unreadCount = unreadRes.count ?? 0;
@@ -77,6 +89,6 @@ export async function GET() {
     })
     .filter((x): x is NonNullable<typeof x> => Boolean(x));
 
-  return NextResponse.json({ unreadCount, notifications }, { status: 200 });
+  return apiOk({ unreadCount, notifications }, { status: 200 });
 }
 

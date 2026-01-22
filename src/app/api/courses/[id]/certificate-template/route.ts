@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -14,7 +16,18 @@ function getExtFromMime(mime: string): string {
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   const url = new URL(request.url);
   const download = url.searchParams.get("download") === "1";
@@ -29,8 +42,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
       .eq("course_id", id)
       .maybeSingle();
 
-    if (loadError) return NextResponse.json({ error: loadError.message }, { status: 500 });
-    return NextResponse.json({ template: data ?? null }, { status: 200 });
+    if (loadError) return apiError("INTERNAL", "Failed to load certificate template.", { status: 500 });
+    return apiOk({ template: data ?? null }, { status: 200 });
   }
 
   // Download behavior (v1): allow downloading the course's certificate template
@@ -46,9 +59,9 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
       .limit(1)
       .maybeSingle();
 
-    if (!cert?.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!cert?.id) return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   } else if (caller.role === "organization_admin") {
-    if (!caller.organization_id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!caller.organization_id) return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     const { data: cert } = await admin
       .from("certificates")
       .select("id")
@@ -57,9 +70,9 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
       .limit(1)
       .maybeSingle();
 
-    if (!cert?.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!cert?.id) return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   } else if (!["super_admin", "system_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const { data: tpl, error: tplError } = await admin
@@ -68,9 +81,9 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     .eq("course_id", id)
     .maybeSingle();
 
-  if (tplError) return NextResponse.json({ error: tplError.message }, { status: 500 });
+  if (tplError) return apiError("INTERNAL", "Failed to load certificate template.", { status: 500 });
   if (!tpl?.storage_bucket || !tpl?.storage_path) {
-    return NextResponse.json({ error: "Certificate template not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Certificate template not found.", { status: 404 });
   }
 
   const { data: signed, error: signedError } = await admin.storage
@@ -78,7 +91,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     .createSignedUrl(tpl.storage_path, 60 * 10);
 
   if (signedError || !signed?.signedUrl) {
-    return NextResponse.json({ error: signedError?.message || "Failed to create signed URL" }, { status: 500 });
+    return apiError("INTERNAL", "Failed to create signed URL.", { status: 500 });
   }
 
   return NextResponse.redirect(signed.signedUrl, { status: 302 });
@@ -87,25 +100,37 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const form = await request.formData().catch(() => null);
-  if (!form) return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
+  if (!form) return apiError("VALIDATION_ERROR", "Invalid form data.", { status: 400 });
 
   const file = form.get("file");
-  if (!(file instanceof File)) return NextResponse.json({ error: "Missing file" }, { status: 400 });
+  if (!(file instanceof File)) return apiError("VALIDATION_ERROR", "Missing file.", { status: 400 });
 
   const allowed = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"]);
   if (!allowed.has(file.type)) {
-    return NextResponse.json({ error: "Invalid file type (allowed: PDF, PNG, JPG, WebP)" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "Invalid file type (allowed: PDF, PNG, JPG, WebP).", { status: 400 });
   }
 
   const maxBytes = 10 * 1024 * 1024;
-  if (file.size > maxBytes) return NextResponse.json({ error: "File too large (max 10MB)" }, { status: 400 });
+  if (file.size > maxBytes) return apiError("VALIDATION_ERROR", "File too large (max 10MB).", { status: 400 });
 
   const admin = createAdminSupabaseClient();
   const { data: courseRow, error: courseError } = await admin
@@ -115,12 +140,13 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     .single();
 
   if (courseError || !courseRow) {
-    return NextResponse.json({ error: courseError?.message || "Course not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Course not found.", { status: 404 });
   }
 
   if (caller.role === "organization_admin") {
     if (!caller.organization_id || courseRow.organization_id !== caller.organization_id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
   }
 
@@ -143,7 +169,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   });
 
   if (uploadRes.error) {
-    return NextResponse.json({ error: uploadRes.error.message }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Upload failed.", internalMessage: uploadRes.error.message });
+    return apiError("INTERNAL", "Upload failed.", { status: 500 });
   }
 
   const { data: upserted, error: upsertError } = await admin
@@ -165,7 +192,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     .single();
 
   if (upsertError || !upserted) {
-    return NextResponse.json({ error: upsertError?.message || "Failed to save certificate template" }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to save certificate template.", internalMessage: upsertError?.message });
+    return apiError("INTERNAL", "Failed to save certificate template.", { status: 500 });
   }
 
   if (existing?.storage_bucket && existing?.storage_path) {
@@ -191,16 +219,29 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     // ignore
   }
 
-  return NextResponse.json({ template: upserted }, { status: 201 });
+  await logApiEvent({ request, caller, outcome: "success", status: 201, publicMessage: "Certificate template uploaded.", details: { course_id: id } });
+  return apiOk({ template: upserted }, { status: 201, message: "Certificate template uploaded." });
 }
 
-export async function DELETE(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const admin = createAdminSupabaseClient();
@@ -210,17 +251,21 @@ export async function DELETE(_request: NextRequest, context: { params: Promise<{
     .eq("course_id", id)
     .maybeSingle();
 
-  if (loadError) return NextResponse.json({ error: loadError.message }, { status: 500 });
-  if (!row) return NextResponse.json({ ok: true }, { status: 200 });
+  if (loadError) return apiError("INTERNAL", "Failed to load certificate template.", { status: 500 });
+  if (!row) return apiOk({ ok: true }, { status: 200 });
 
   if (caller.role === "organization_admin") {
     if (!caller.organization_id || row.organization_id !== caller.organization_id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
   }
 
   const { error: delError } = await admin.from("course_certificate_templates").delete().eq("course_id", id);
-  if (delError) return NextResponse.json({ error: delError.message }, { status: 500 });
+  if (delError) {
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to delete certificate template.", internalMessage: delError.message });
+    return apiError("INTERNAL", "Failed to delete certificate template.", { status: 500 });
+  }
 
   try {
     await admin.storage.from(row.storage_bucket).remove([row.storage_path]);
@@ -228,6 +273,7 @@ export async function DELETE(_request: NextRequest, context: { params: Promise<{
     // ignore
   }
 
-  return NextResponse.json({ ok: true }, { status: 200 });
+  await logApiEvent({ request, caller, outcome: "success", status: 200, publicMessage: "Certificate template deleted.", details: { course_id: id } });
+  return apiOk({ ok: true }, { status: 200, message: "Certificate template deleted." });
 }
 

@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { fetchJson } from "@/lib/api";
 
 type MeResponse = {
   user: {
@@ -81,9 +83,7 @@ export function ProfileForm() {
       setError(null);
       setSuccess(null);
       try {
-        const res = await fetch("/api/me", { cache: "no-store" });
-        const body = (await res.json().catch(() => ({}))) as Partial<MeResponse> & { error?: string };
-        if (!res.ok) throw new Error(body.error || "Failed to load profile");
+        const { data: body } = await fetchJson<MeResponse>("/api/me", { cache: "no-store" });
         if (cancelled) return;
 
         const u = body.user!;
@@ -117,12 +117,9 @@ export function ProfileForm() {
     async function loadPresets() {
       setIsLoadingPresets(true);
       try {
-        const res = await fetch("/api/avatar-presets", { cache: "no-store" });
-        const body = (await res.json().catch(() => ({}))) as {
-          presets?: Array<{ name: string; url: string }>;
-          error?: string;
-        };
-        if (!res.ok) throw new Error(body.error || "Failed to load avatar presets");
+        const { data: body } = await fetchJson<{ presets: Array<{ name: string; url: string }> }>("/api/avatar-presets", {
+          cache: "no-store",
+        });
         if (cancelled) return;
         setPresetAvatars(Array.isArray(body.presets) ? body.presets : []);
       } catch {
@@ -145,20 +142,18 @@ export function ProfileForm() {
     const t = toast.loading("Saving profile…");
     try {
       const name = normalizeFullName(fullName);
-      const res = await fetch("/api/me", {
+      const { data: body, message } = await fetchJson<MeResponse>("/api/me", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ full_name: name.length ? name : null }),
       });
-      const body = (await res.json().catch(() => ({}))) as Partial<MeResponse> & { error?: string };
-      if (!res.ok) throw new Error(body.error || "Failed to save");
 
       const saved = body.user?.full_name ?? "";
       setFullName(saved);
       setOriginalFullName(saved);
       setAvatarUrl((body.user as { avatar_url?: string | null } | undefined)?.avatar_url ?? avatarUrl);
-      setSuccess("Saved.");
-      toast.success("Profile saved.", { id: t });
+      setSuccess(message || "Saved.");
+      toast.success(message || "Profile saved.", { id: t });
       setIsEditingInfo(false);
 
       // Let the rest of the app refresh user state + server components.
@@ -183,14 +178,12 @@ export function ProfileForm() {
     try {
       const form = new FormData();
       form.append("file", fileToUpload);
-      const res = await fetch("/api/me/avatar", { method: "POST", body: form });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; avatar_url?: string | null };
-      if (!res.ok) throw new Error(body.error || "Failed to upload avatar");
+      const { data: body, message } = await fetchJson<{ avatar_url: string | null }>("/api/me/avatar", { method: "POST", body: form });
 
       setAvatarUrl(body.avatar_url ?? null);
       setAvatarFile(null);
-      setSuccess("Avatar updated.");
-      toast.success("Profile photo updated.", { id: t });
+      setSuccess(message || "Avatar updated.");
+      toast.success(message || "Profile photo updated.", { id: t });
       window.dispatchEvent(new Event("profile:updated"));
       router.refresh();
     } catch (e) {
@@ -224,14 +217,12 @@ export function ProfileForm() {
     setIsRemovingAvatar(true);
     const t = toast.loading("Removing profile photo…");
     try {
-      const res = await fetch("/api/me/avatar", { method: "DELETE" });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; avatar_url?: string | null };
-      if (!res.ok) throw new Error(body.error || "Failed to remove avatar");
+      const { message } = await fetchJson<{ avatar_url: null }>("/api/me/avatar", { method: "DELETE" });
 
       setAvatarUrl(null);
       setAvatarFile(null);
-      setSuccess("Avatar removed.");
-      toast.success("Profile photo removed.", { id: t });
+      setSuccess(message || "Avatar removed.");
+      toast.success(message || "Profile photo removed.", { id: t });
       window.dispatchEvent(new Event("profile:updated"));
       router.refresh();
     } catch (e) {
@@ -249,17 +240,15 @@ export function ProfileForm() {
     setIsSettingPreset(true);
     const t = toast.loading("Setting preset avatar…");
     try {
-      const res = await fetch("/api/me/avatar-preset", {
+      const { data: body, message } = await fetchJson<{ avatar_url: string | null }>("/api/me/avatar-preset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; avatar_url?: string | null };
-      if (!res.ok) throw new Error(body.error || "Failed to set avatar preset");
       setAvatarUrl(body.avatar_url ?? null);
       setAvatarFile(null);
-      setSuccess("Avatar updated.");
-      toast.success("Profile photo updated.", { id: t });
+      setSuccess(message || "Avatar updated.");
+      toast.success(message || "Profile photo updated.", { id: t });
       setIsPresetPickerOpen(false);
       window.dispatchEvent(new Event("profile:updated"));
       router.refresh();
@@ -354,7 +343,7 @@ export function ProfileForm() {
           </div>
 
           <div
-            className={`rounded-md border border-dashed px-4 py-4 transition ${
+            className={`rounded-md border border-dashed px-4 py-4 transition cursor-pointer ${
               isDraggingAvatar ? "border-primary bg-primary/10" : "border-muted-foreground/30 bg-muted/40"
             }`}
             role="button"
@@ -445,7 +434,7 @@ export function ProfileForm() {
                     <>
                       <button
                         type="button"
-                        className={`inline-flex items-center gap-3 rounded-md border bg-background px-3 py-2 hover:cursor-pointer ${
+                        className={`w-auto min-w-[195px] inline-flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2 transition hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 focus-visible:ring-offset-2 focus-visible:ring-offset-background cursor-pointer ${
                           isDisabled ? "opacity-60 cursor-not-allowed" : ""
                         }`}
                         disabled={isDisabled}
@@ -453,18 +442,24 @@ export function ProfileForm() {
                         aria-label="Choose a preset avatar"
                         aria-expanded={isPresetPickerOpen}
                       >
-                        {previewUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={previewUrl} alt="Preset avatar" className="h-10 w-10 rounded-full object-cover border" />
-                        ) : (
-                          <div className="h-10 w-10 rounded-full border flex items-center justify-center text-xs text-muted-foreground">
-                            —
-                          </div>
-                        )}
-                        <span className="text-sm text-muted-foreground">
-                          {isPresetPickerOpen ? "Close presets" : "Choose preset"}
+                        <span className="inline-flex items-center gap-3">
+                          {previewUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={previewUrl} alt="Preset avatar" className="h-10 w-10 rounded-full object-cover border" />
+                          ) : (
+                            <div className="h-10 w-10 rounded-full border flex items-center justify-center text-xs text-muted-foreground">
+                              —
+                            </div>
+                          )}
+                          <span className="text-sm text-muted-foreground">
+                            {isPresetPickerOpen ? "Close presets" : "Choose preset"}
+                          </span>
                         </span>
+                        <ChevronDown
+                          className={`h-4 w-4 text-muted-foreground transition-transform ${isPresetPickerOpen ? "rotate-180" : ""}`}
+                        />
                       </button>
+                      <p className="mt-1 text-xs text-muted-foreground">Click to choose a preset.</p>
 
                       {isPresetPickerOpen ? (
                         <div className="absolute z-20 mt-2 w-[415px] max-w-[90vw] rounded-lg border bg-background shadow-lg p-3">

@@ -14,6 +14,7 @@ import {
   User,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { Role } from "@/types";
 
 export type NavIconKey =
   | "LayoutDashboard"
@@ -54,10 +55,10 @@ export interface NavItem {
 }
 
 // User roles type
-export type UserRole = 'super_admin' | 'system_admin' | 'organization_admin' | 'member';
+export type UserRole = Role;
 
 // Navigation configuration by role
-export const NAVIGATION: Record<UserRole, NavItem[]> = {
+export const NAVIGATION: Record<Role, NavItem[]> = {
   // 👑 SUPER_ADMIN - Developer (Full access to everything)
   super_admin: [
     { label: 'Dashboard', href: '/admin', iconKey: "LayoutDashboard" },
@@ -69,6 +70,7 @@ export const NAVIGATION: Record<UserRole, NavItem[]> = {
     { label: 'Certificates', href: '/admin/certificates', iconKey: "Award" },
     { label: 'Reports', href: '/admin/reports', iconKey: "BarChart3" },
     { label: 'System Settings', href: '/admin/settings', iconKey: "Settings" },
+    { label: 'System Reports', href: '/admin/system-reports', iconKey: "BarChart3" },
     { label: 'Audit Logs', href: '/admin/audit', iconKey: "FileText" },
   ],
 
@@ -110,7 +112,7 @@ export const NAVIGATION: Record<UserRole, NavItem[]> = {
 };
 
 // Helper function to get navigation items with orgId replaced
-export function getNavItemsForRole(role: UserRole, orgId?: string | null): NavItem[] {
+export function getNavItemsForRole(role: Role, orgId?: string | null): NavItem[] {
   const items = NAVIGATION[role];
   
   if (!orgId) return items;

@@ -1,6 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { updateProfileSchema, validateSchema } from "@/lib/validations/schemas";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 type MeResponse = {
   user: {
@@ -37,9 +39,20 @@ function rateLimit(key: string, opts: { windowMs: number; max: number }): boolea
   return true;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   // Best-effort org display fields (avoid relying on RLS by using admin client,
   // but only for the caller's own org id).
@@ -64,18 +77,21 @@ export async function GET() {
     }
   }
 
-  return NextResponse.json({
-    user: {
-      id: caller.id,
-      email: caller.email,
-      role: caller.role,
-      organization_id: caller.organization_id,
-      organization_name,
-      organization_slug,
-      full_name: (caller.full_name ?? null) as string | null,
-      avatar_url: ((caller as { avatar_url?: unknown } | null)?.avatar_url ?? null) as string | null,
-    },
-  } satisfies MeResponse);
+  return apiOk(
+    {
+      user: {
+        id: caller.id,
+        email: caller.email,
+        role: caller.role,
+        organization_id: caller.organization_id,
+        organization_name,
+        organization_slug,
+        full_name: (caller.full_name ?? null) as string | null,
+        avatar_url: ((caller as { avatar_url?: unknown } | null)?.avatar_url ?? null) as string | null,
+      },
+    } satisfies MeResponse,
+    { status: 200 }
+  );
 }
 
 export async function PATCH(request: NextRequest) {
@@ -86,27 +102,50 @@ export async function PATCH(request: NextRequest) {
     "local";
   const key = `patch:${ip}`;
   if (!rateLimit(key, { windowMs: 10_000, max: 10 })) {
-    return NextResponse.json(
-      { error: "Too many profile update requests. Please stop any repeated calls and try again." },
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 429,
+      code: "RATE_LIMITED",
+      publicMessage: "Too many profile update requests. Please stop any repeated calls and try again.",
+      internalMessage: `Rate limit hit for key=${key}`,
+    });
+    return apiError(
+      "RATE_LIMITED",
+      "Too many profile update requests. Please stop any repeated calls and try again.",
       { status: 429 }
     );
   }
 
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   // Parse and validate with zod
   const body = await request.json().catch(() => null);
   const validation = validateSchema(updateProfileSchema, body);
   
   if (!validation.success) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: validation.error });
+    return apiError("VALIDATION_ERROR", validation.error, { status: 400 });
   }
 
   const { full_name } = validation.data;
 
   if (full_name === undefined) {
-    return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Nothing to update." });
+    return apiError("VALIDATION_ERROR", "Nothing to update.", { status: 400 });
   }
 
   // Prefer updating with the user's session (RLS-friendly). If RLS blocks this,
@@ -131,33 +170,50 @@ export async function PATCH(request: NextRequest) {
       /does not exist/i.test(attempt.error.message || ""));
 
   if (missingColumn) {
-    return NextResponse.json(
-      {
-        error:
-          'Database is missing column "users.full_name". Add it in Supabase (SQL Editor): alter table public.users add column if not exists full_name text;',
-      },
-      { status: 500 }
-    );
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Profile updates are temporarily unavailable. Please contact support.",
+      internalMessage:
+        'Database is missing column "users.full_name". Add it in Supabase: alter table public.users add column if not exists full_name text;',
+    });
+    return apiError("INTERNAL", "Profile updates are temporarily unavailable. Please contact support.", { status: 500 });
   }
 
   if (attempt.error && !permissionDenied) {
-    return NextResponse.json({ error: attempt.error.message || "Failed to update profile" }, { status: 500 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to update profile.",
+      internalMessage: attempt.error.message || "unknown update error",
+    });
+    return apiError("INTERNAL", "Failed to update profile.", { status: 500 });
   }
 
   if (!attempt.error && attempt.data) {
     // Return the value as stored (single source of truth)
     const avatarRaw = (attempt.data as { avatar_url?: unknown }).avatar_url;
     const avatarUrl = typeof avatarRaw === "string" ? avatarRaw : null;
-    return NextResponse.json({
-      user: {
-        id: attempt.data.id,
-        email: attempt.data.email,
-        role: attempt.data.role,
-        organization_id: attempt.data.organization_id,
-        full_name: attempt.data.full_name ?? null,
-        avatar_url: avatarUrl,
-      },
-    } satisfies MeResponse);
+    await logApiEvent({ request, caller, outcome: "success", status: 200, publicMessage: "Profile saved." });
+    return apiOk(
+      {
+        user: {
+          id: attempt.data.id,
+          email: attempt.data.email,
+          role: attempt.data.role,
+          organization_id: attempt.data.organization_id,
+          full_name: attempt.data.full_name ?? null,
+          avatar_url: avatarUrl,
+        },
+      } satisfies MeResponse,
+      { status: 200, message: "Profile saved." }
+    );
   }
 
   // Fallback: admin client update (bypasses RLS, but only for caller.id)
@@ -171,7 +227,16 @@ export async function PATCH(request: NextRequest) {
       .single();
 
     if (updateError || !data) {
-      return NextResponse.json({ error: updateError?.message || "Failed to update profile" }, { status: 500 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 500,
+        code: "INTERNAL",
+        publicMessage: "Failed to update profile.",
+        internalMessage: updateError?.message || "no updated row returned",
+      });
+      return apiError("INTERNAL", "Failed to update profile.", { status: 500 });
     }
 
     // Extra safety: verify persisted value (prevents false "Saved" UX).
@@ -182,10 +247,16 @@ export async function PATCH(request: NextRequest) {
       .single();
 
     if (verifyError) {
-      return NextResponse.json(
-        { error: `Profile updated but failed to verify persistence: ${verifyError.message}` },
-        { status: 500 }
-      );
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 500,
+        code: "INTERNAL",
+        publicMessage: "Failed to verify profile update.",
+        internalMessage: verifyError.message,
+      });
+      return apiError("INTERNAL", "Failed to verify profile update.", { status: 500 });
     }
 
     const stored = (verify as { full_name?: unknown } | null)?.full_name;
@@ -193,32 +264,46 @@ export async function PATCH(request: NextRequest) {
     const expected = full_name ?? null;
 
     if (expected !== storedName) {
-      return NextResponse.json(
-        {
-          error:
-            "Profile save could not be verified. Please refresh and try again. (Stored value mismatch)",
-        },
-        { status: 500 }
-      );
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 500,
+        code: "INTERNAL",
+        publicMessage: "Profile save could not be verified. Please refresh and try again.",
+        internalMessage: "stored value mismatch",
+      });
+      return apiError("INTERNAL", "Profile save could not be verified. Please refresh and try again.", { status: 500 });
     }
 
-    return NextResponse.json({
-      user: {
-        id: data.id,
-        email: data.email,
-        role: data.role,
-        organization_id: data.organization_id,
-        full_name: storedName,
-        avatar_url: (() => {
-          const raw = (data as { avatar_url?: unknown }).avatar_url;
-          return typeof raw === "string" ? raw : null;
-        })(),
-      },
-    } satisfies MeResponse);
-  } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Failed to update profile" },
-      { status: 500 }
+    await logApiEvent({ request, caller, outcome: "success", status: 200, publicMessage: "Profile saved." });
+    return apiOk(
+      {
+        user: {
+          id: data.id,
+          email: data.email,
+          role: data.role,
+          organization_id: data.organization_id,
+          full_name: storedName,
+          avatar_url: (() => {
+            const raw = (data as { avatar_url?: unknown }).avatar_url;
+            return typeof raw === "string" ? raw : null;
+          })(),
+        },
+      } satisfies MeResponse,
+      { status: 200, message: "Profile saved." }
     );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Failed to update profile";
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to update profile.",
+      internalMessage: msg,
+    });
+    return apiError("INTERNAL", "Failed to update profile.", { status: 500 });
   }
 }

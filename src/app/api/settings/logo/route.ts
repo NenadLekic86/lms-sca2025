@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient, getServerUser } from '@/lib/supabase/server';
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = 'nodejs';
 
@@ -22,26 +23,44 @@ function getExt(mime: string): string {
 export async function POST(request: Request) {
   // super_admin only
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (caller.role !== 'super_admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
+  if (caller.role !== 'super_admin') {
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+  }
 
   const form = await request.formData().catch(() => null);
-  if (!form) return NextResponse.json({ error: 'Invalid form data' }, { status: 400 });
+  if (!form) {
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Invalid form data." });
+    return apiError("VALIDATION_ERROR", "Invalid form data.", { status: 400 });
+  }
 
   const file = form.get('file');
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: 'Missing file' }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Missing file." });
+    return apiError("VALIDATION_ERROR", "Missing file.", { status: 400 });
   }
 
   if (!ALLOWED_MIME.has(file.type)) {
-    return NextResponse.json(
-      { error: `Invalid file type. Allowed: ${Array.from(ALLOWED_MIME).join(', ')}` },
-      { status: 400 }
-    );
+    const msg = `Invalid file type. Allowed: ${Array.from(ALLOWED_MIME).join(", ")}`;
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: msg });
+    return apiError("VALIDATION_ERROR", msg, { status: 400 });
   }
 
   if (file.size > MAX_BYTES) {
-    return NextResponse.json({ error: 'File too large (max 2MB)' }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "File too large (max 2MB)." });
+    return apiError("VALIDATION_ERROR", "File too large (max 2MB).", { status: 400 });
   }
 
   const admin = createAdminSupabaseClient();
@@ -61,7 +80,16 @@ export async function POST(request: Request) {
     });
 
   if (uploadError) {
-    return NextResponse.json({ error: `Upload failed: ${uploadError.message}` }, { status: 500 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Upload failed.",
+      internalMessage: uploadError.message,
+    });
+    return apiError("INTERNAL", "Upload failed.", { status: 500 });
   }
 
   const { data: publicUrlData } = admin.storage.from('branding').getPublicUrl(objectPath);
@@ -74,7 +102,16 @@ export async function POST(request: Request) {
     .single();
 
   if (currentError || !current?.id) {
-    return NextResponse.json({ error: 'public_app_settings row not found' }, { status: 500 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Settings row not found.",
+      internalMessage: currentError?.message || "public_app_settings row missing",
+    });
+    return apiError("INTERNAL", "Settings row not found.", { status: 500 });
   }
 
   const { data: updated, error: updateError } = await admin
@@ -88,7 +125,16 @@ export async function POST(request: Request) {
     .single();
 
   if (updateError || !updated) {
-    return NextResponse.json({ error: `Failed to update settings: ${updateError?.message}` }, { status: 500 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to update settings.",
+      internalMessage: updateError?.message || "no updated row returned",
+    });
+    return apiError("INTERNAL", "Failed to update settings.", { status: 500 });
   }
 
   // Best-effort audit log
@@ -112,13 +158,21 @@ export async function POST(request: Request) {
     // don't block success
   }
 
-  return NextResponse.json(
+  await logApiEvent({
+    request,
+    caller,
+    outcome: "success",
+    status: 201,
+    publicMessage: "Logo uploaded.",
+    details: { logo_url: updated.logo_url, path: objectPath, mime: file.type, size: file.size },
+  });
+
+  return apiOk(
     {
-      message: 'Logo uploaded',
       logo_url: updated.logo_url,
       path: objectPath,
     },
-    { status: 201 }
+    { status: 201, message: "Logo uploaded." }
   );
 }
 

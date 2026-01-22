@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { apiOk } from "@/lib/api/response";
 
 export const runtime = "nodejs";
 
@@ -21,7 +21,7 @@ export async function POST() {
     }
   }
 
-  return NextResponse.json({ message: "Logged out" }, { status: 200 });
+  return apiOk({ ok: true }, { status: 200, message: "Logged out." });
 }
 
 

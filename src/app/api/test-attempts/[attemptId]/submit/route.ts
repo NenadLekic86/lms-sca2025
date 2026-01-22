@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { z } from "zod";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { validateSchema } from "@/lib/validations/schemas";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -16,13 +18,30 @@ type TestRow = { id: string; course_id: string | null; pass_score: number | null
 export async function POST(request: NextRequest, context: { params: Promise<{ attemptId: string }> }) {
   const { attemptId } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
-  if (caller.role !== "member") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (caller.role !== "member") {
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+  }
 
   const body = await request.json().catch(() => null);
   const validation = validateSchema(submitSchema, body);
-  if (!validation.success) return NextResponse.json({ error: validation.error }, { status: 400 });
+  if (!validation.success) {
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: validation.error });
+    return apiError("VALIDATION_ERROR", validation.error, { status: 400 });
+  }
 
   const admin = createAdminSupabaseClient();
 
@@ -33,9 +52,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ at
     .eq("id", attemptId)
     .single();
 
-  if (attemptError || !attempt) return NextResponse.json({ error: attemptError?.message || "Attempt not found" }, { status: 404 });
-  if (attempt.user_id !== caller.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  if (attempt.submitted_at) return NextResponse.json({ error: "Attempt already submitted" }, { status: 400 });
+  if (attemptError || !attempt) return apiError("NOT_FOUND", "Attempt not found.", { status: 404 });
+  if (attempt.user_id !== caller.id) return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+  if (attempt.submitted_at) return apiError("VALIDATION_ERROR", "Attempt already submitted.", { status: 400 });
 
   // Load test settings for pass score.
   const { data: test, error: testError } = await admin
@@ -44,7 +63,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ at
     .eq("id", attempt.test_id)
     .single();
 
-  if (testError || !test) return NextResponse.json({ error: testError?.message || "Test not found" }, { status: 404 });
+  if (testError || !test) return apiError("NOT_FOUND", "Test not found.", { status: 404 });
 
   const testRow = test as unknown as TestRow;
   const courseId = typeof testRow.course_id === "string" ? testRow.course_id : null;
@@ -56,7 +75,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ at
     .select("id, points, type")
     .eq("test_id", attempt.test_id);
 
-  if (qError) return NextResponse.json({ error: qError.message }, { status: 500 });
+  if (qError) return apiError("INTERNAL", "Failed to submit attempt.", { status: 500 });
 
   const questions = (Array.isArray(questionsData) ? questionsData : []) as unknown as QuestionRow[];
   const questionIds = questions.map((q) => q.id);
@@ -68,7 +87,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ at
         .in("question_id", questionIds)
     : { data: [], error: null };
 
-  if (oError) return NextResponse.json({ error: oError.message }, { status: 500 });
+  if (oError) return apiError("INTERNAL", "Failed to submit attempt.", { status: 500 });
   const options = (Array.isArray(optionsData) ? optionsData : []) as unknown as OptionRow[];
 
   const correctByQuestion = new Map<string, Set<string>>();
@@ -116,7 +135,10 @@ export async function POST(request: NextRequest, context: { params: Promise<{ at
     })
     .eq("id", attemptId);
 
-  if (updError) return NextResponse.json({ error: updError.message }, { status: 500 });
+  if (updError) {
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to submit.", internalMessage: updError.message });
+    return apiError("INTERNAL", "Failed to submit.", { status: 500 });
+  }
 
   // If passed: issue certificate + mark enrollment complete (best-effort, idempotent).
   // IMPORTANT: do not fail the request after the attempt is saved (member would be stuck).
@@ -161,6 +183,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ at
     }
   }
 
-  return NextResponse.json({ ok: true, score, passed, pass_score: passScore }, { status: 200 });
+  await logApiEvent({ request, caller, outcome: "success", status: 200, publicMessage: "Submitted.", details: { attempt_id: attemptId, score, passed } });
+  return apiOk({ score, passed, pass_score: passScore }, { status: 200, message: "Submitted." });
 }
 

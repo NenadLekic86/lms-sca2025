@@ -1,5 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -11,14 +13,25 @@ function isUuid(v: unknown): v is string {
 
 export async function POST(request: NextRequest) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   const body = (await request.json().catch(() => ({}))) as Body;
   const all = body.all === true;
   const notificationId = body.notification_id;
 
   if (!all && !isUuid(notificationId)) {
-    return NextResponse.json({ error: "Provide { all: true } or a valid notification_id" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "Provide { all: true } or a valid notification_id.", { status: 400 });
   }
 
   const supabase = await createServerSupabaseClient();
@@ -34,9 +47,9 @@ export async function POST(request: NextRequest) {
     : await updateQuery.eq("notification_id", notificationId as string);
 
   if (updateError) {
-    return NextResponse.json({ error: updateError.message }, { status: 500 });
+    return apiError("INTERNAL", "Failed to mark notifications as read.", { status: 500 });
   }
 
-  return NextResponse.json({ ok: true }, { status: 200 });
+  return apiOk({ ok: true }, { status: 200 });
 }
 

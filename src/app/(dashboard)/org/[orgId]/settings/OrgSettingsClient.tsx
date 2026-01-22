@@ -5,6 +5,7 @@ import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { fetchJson } from "@/lib/api";
 
 type Props = {
   orgId: string;
@@ -29,12 +30,13 @@ export default function OrgSettingsClient({ orgId, orgLabel, initialLogoUrl }: P
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch(`/api/organizations/${orgId}/logo`, { method: "POST", body: form });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || "Failed to upload logo");
+      const { data: body, message } = await fetchJson<{ logo_url: string | null }>(`/api/organizations/${orgId}/logo`, {
+        method: "POST",
+        body: form,
+      });
       if (body.logo_url) setLogoUrl(String(body.logo_url));
-      setSuccess("Logo uploaded.");
-      toast.success("Organization logo uploaded.", { id: t });
+      setSuccess(message || "Logo uploaded.");
+      toast.success(message || "Organization logo uploaded.", { id: t });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to upload logo";
       setError(msg);
@@ -50,12 +52,10 @@ export default function OrgSettingsClient({ orgId, orgLabel, initialLogoUrl }: P
     setIsRemoving(true);
     const t = toast.loading("Removing organization logo…");
     try {
-      const res = await fetch(`/api/organizations/${orgId}/logo`, { method: "DELETE" });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || "Failed to remove logo");
+      const { message } = await fetchJson<{ logo_url: null }>(`/api/organizations/${orgId}/logo`, { method: "DELETE" });
       setLogoUrl("");
-      setSuccess("Logo removed.");
-      toast.success("Organization logo removed.", { id: t });
+      setSuccess(message || "Logo removed.");
+      toast.success(message || "Organization logo removed.", { id: t });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to remove logo";
       setError(msg);

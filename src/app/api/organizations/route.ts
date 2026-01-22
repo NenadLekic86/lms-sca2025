@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { emitNotificationToUsers } from "@/lib/notifications/server";
 import { createOrganizationSchema, validateSchema } from "@/lib/validations/schemas";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 type OrgRow = {
   id: string;
@@ -46,9 +48,20 @@ const RESERVED_ORG_SLUGS = new Set<string>([
 
 export async function GET(request: NextRequest) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
   if (!["super_admin", "system_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const includeCounts = new URL(request.url).searchParams.get("include_counts") === "1";
@@ -60,13 +73,13 @@ export async function GET(request: NextRequest) {
     .order("created_at", { ascending: false });
 
   if (loadError) {
-    return NextResponse.json({ error: loadError.message }, { status: 500 });
+    return apiError("INTERNAL", "Failed to load organizations.", { status: 500 });
   }
 
   const orgs = (Array.isArray(data) ? data : []) as OrgRow[];
 
   if (!includeCounts) {
-    return NextResponse.json({ organizations: orgs });
+    return apiOk({ organizations: orgs }, { status: 200 });
   }
 
   // Compute counts (best-effort, admin-only). If a table is missing, surface a soft error in response.
@@ -147,21 +160,44 @@ export async function GET(request: NextRequest) {
     certificates_count: certificatesByOrg[o.id] || 0,
   }));
 
-  return NextResponse.json({
-    organizations: enriched,
-    counts_errors: {
-      users: usersCountError,
-      courses: coursesCountError,
-      certificates: certificatesCountError,
+  return apiOk(
+    {
+      organizations: enriched,
+      counts_errors: {
+        users: usersCountError,
+        courses: coursesCountError,
+        certificates: certificatesCountError,
+      },
     },
-  });
+    { status: 200 }
+  );
 }
 
 export async function POST(request: NextRequest) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
   if (!["super_admin", "system_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 403,
+      code: "FORBIDDEN",
+      publicMessage: "Forbidden",
+      internalMessage: "only super_admin/system_admin can create organizations",
+    });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   // Parse and validate with zod
@@ -169,18 +205,43 @@ export async function POST(request: NextRequest) {
   const validation = validateSchema(createOrganizationSchema, body);
   
   if (!validation.success) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 400,
+      code: "VALIDATION_ERROR",
+      publicMessage: validation.error,
+    });
+    return apiError("VALIDATION_ERROR", validation.error, { status: 400 });
   }
 
   const { name, slug: slugInput } = validation.data;
   const explicitSlug = typeof slugInput === "string" && slugInput.trim().length > 0;
   let baseSlug = slugify(explicitSlug ? String(slugInput) : name);
   if (!baseSlug) {
-    return NextResponse.json({ error: "Organization slug is required (could not be derived from name)." }, { status: 400 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 400,
+      code: "VALIDATION_ERROR",
+      publicMessage: "Organization slug is required.",
+      internalMessage: "could not derive slug from name",
+    });
+    return apiError("VALIDATION_ERROR", "Organization slug is required.", { status: 400 });
   }
   if (RESERVED_ORG_SLUGS.has(baseSlug)) {
     if (explicitSlug) {
-      return NextResponse.json({ error: `Slug "${baseSlug}" is reserved. Please choose another slug.` }, { status: 400 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 400,
+        code: "VALIDATION_ERROR",
+        publicMessage: `Slug "${baseSlug}" is reserved. Please choose another slug.`,
+      });
+      return apiError("VALIDATION_ERROR", `Slug "${baseSlug}" is reserved. Please choose another slug.`, { status: 400 });
     }
     baseSlug = `${baseSlug}-org`;
   }
@@ -209,23 +270,44 @@ export async function POST(request: NextRequest) {
     const conflict = /duplicate key|unique constraint|already exists/i.test(msg);
     if (conflict) {
       if (explicitSlug) {
-        return NextResponse.json(
-          { error: `Slug "${baseSlug}" is already taken. Please choose another slug.` },
-          { status: 409 }
-        );
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 409,
+          code: "CONFLICT",
+          publicMessage: `Slug "${baseSlug}" is already taken. Please choose another slug.`,
+          internalMessage: msg,
+        });
+        return apiError("CONFLICT", `Slug "${baseSlug}" is already taken. Please choose another slug.`, { status: 409 });
       }
       // retry
       continue;
     }
 
-    return NextResponse.json({ error: msg || "Failed to create organization" }, { status: 500 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to create organization.",
+      internalMessage: msg || "unknown insert error",
+    });
+    return apiError("INTERNAL", "Failed to create organization.", { status: 500 });
   }
 
   if (!inserted) {
-    return NextResponse.json(
-      { error: "Failed to create organization (could not generate a unique slug). Please try a different name." },
-      { status: 500 }
-    );
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to create organization.",
+      internalMessage: "could not generate unique slug",
+    });
+    return apiError("INTERNAL", "Failed to create organization.", { status: 500 });
   }
 
   // Best-effort notifications (super_admin + system_admin)
@@ -278,5 +360,14 @@ export async function POST(request: NextRequest) {
     // ignore
   }
 
-  return NextResponse.json({ organization: inserted }, { status: 201 });
+  await logApiEvent({
+    request,
+    caller,
+    outcome: "success",
+    status: 201,
+    publicMessage: "Organization created.",
+    details: { organization_id: inserted.id, slug: finalSlug },
+  });
+
+  return apiOk({ organization: inserted }, { status: 201, message: "Organization created." });
 }

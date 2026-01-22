@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Input } from "@/components/ui/input";
+import { fetchJson } from "@/lib/api";
 
 type Item = { id: string; label: string; meta?: string | null };
 
@@ -67,13 +68,13 @@ export function AsyncIdCombobox({
 
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(fetchUrl({ q, page, page_size: pageSize }), { method: "GET" });
-        const body = (await res.json().catch(() => null)) as unknown;
+        const { data: body } = await fetchJson<Record<string, unknown>>(fetchUrl({ q, page, page_size: pageSize }), {
+          method: "GET",
+        });
         if (cancelled) return;
         if (myReq !== reqId.current) return;
         const bodyRec = (body && typeof body === "object" ? (body as Record<string, unknown>) : null);
-        const bodyError = typeof bodyRec?.error === "string" ? bodyRec.error : null;
-        if (!res.ok) throw new Error(bodyError || "Failed to load options");
+        if (!bodyRec) throw new Error("Failed to load options");
 
         const list =
           (bodyRec?.items ?? bodyRec?.organizations ?? bodyRec?.users ?? bodyRec?.courses) as unknown;

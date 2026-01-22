@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { THEME_CACHE_KEY } from "@/lib/theme/themeConstants";
+import { fetchJson } from "@/lib/api";
 
 type SettingsResponse = {
   settings: {
@@ -75,12 +76,7 @@ export default function SystemSettingsPage() {
       setIsLoading(true);
       setError(null);
       try {
-        const res = await fetch("/api/settings", { cache: "no-store" });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || "Failed to load settings");
-        }
-        const data = (await res.json()) as SettingsResponse;
+        const { data } = await fetchJson<SettingsResponse>("/api/settings", { cache: "no-store" });
         if (cancelled) return;
 
         setAppName(data.settings.app_name ?? "");
@@ -111,7 +107,7 @@ export default function SystemSettingsPage() {
 
     setIsSaving(true);
     try {
-      const res = await fetch("/api/settings", {
+      const { data: body, message } = await fetchJson<SettingsResponse>("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -122,11 +118,6 @@ export default function SystemSettingsPage() {
           theme: parsedTheme,
         }),
       });
-
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(body.error || "Failed to save settings");
-      }
 
       // Apply theme immediately (no full refresh)
       const savedTheme = (body?.settings?.theme ?? parsedTheme) as Record<string, string>;
@@ -144,7 +135,7 @@ export default function SystemSettingsPage() {
       // Refresh sidebar branding immediately (no hard reload)
       window.dispatchEvent(new Event("branding:updated"));
 
-      setSuccess("Saved.");
+      setSuccess(message || "Saved.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save settings");
     } finally {
@@ -161,15 +152,10 @@ export default function SystemSettingsPage() {
       const form = new FormData();
       form.append("file", file);
 
-      const res = await fetch("/api/settings/logo", {
+      const { data: body, message } = await fetchJson<{ logo_url: string; path: string }>("/api/settings/logo", {
         method: "POST",
         body: form,
       });
-
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(body.error || "Failed to upload logo");
-      }
 
       if (body.logo_url) {
         setLogoUrl(body.logo_url);
@@ -178,7 +164,7 @@ export default function SystemSettingsPage() {
       // Refresh sidebar branding immediately (no hard reload)
       window.dispatchEvent(new Event("branding:updated"));
 
-      setSuccess("Logo uploaded.");
+      setSuccess(message || "Logo uploaded.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to upload logo");
     } finally {

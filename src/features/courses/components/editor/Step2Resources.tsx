@@ -5,6 +5,7 @@ import { Loader2, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { fetchJson } from "@/lib/api";
 
 type ResourceRow = {
   id: string;
@@ -71,16 +72,10 @@ export function Step2Resources({
     setLoading(true);
     setError(null);
     try {
-      const [resA, resB] = await Promise.all([
-        fetch(`/api/courses/${courseId}/resources`, { cache: "no-store" }),
-        fetch(`/api/courses/${courseId}/videos`, { cache: "no-store" }),
+      const [{ data: a }, { data: b }] = await Promise.all([
+        fetchJson<{ resources?: ResourceRow[] }>(`/api/courses/${courseId}/resources`, { cache: "no-store" }),
+        fetchJson<{ videos?: VideoRow[] }>(`/api/courses/${courseId}/videos`, { cache: "no-store" }),
       ]);
-
-      const a = (await resA.json().catch(() => ({}))) as { resources?: ResourceRow[]; error?: string };
-      const b = (await resB.json().catch(() => ({}))) as { videos?: VideoRow[]; error?: string };
-
-      if (!resA.ok) throw new Error(a.error || "Failed to load resources");
-      if (!resB.ok) throw new Error(b.error || "Failed to load videos");
 
       setResources(Array.isArray(a.resources) ? a.resources : []);
       setVideos(Array.isArray(b.videos) ? b.videos : []);
@@ -103,9 +98,7 @@ export function Step2Resources({
     try {
       const form = new FormData();
       pdfFiles.forEach((f) => form.append("files", f));
-      const res = await fetch(`/api/courses/${courseId}/resources`, { method: "POST", body: form });
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(body.error || "Failed to upload PDFs");
+      await fetchJson<Record<string, unknown>>(`/api/courses/${courseId}/resources`, { method: "POST", body: form });
       setPdfFiles([]);
       await load();
     } catch (e) {
@@ -117,10 +110,10 @@ export function Step2Resources({
 
   async function deleteResource(id: string) {
     setError(null);
-    const res = await fetch(`/api/courses/${courseId}/resources/${id}`, { method: "DELETE" });
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    if (!res.ok) {
-      setError(body.error || "Failed to delete resource");
+    try {
+      await fetchJson<Record<string, unknown>>(`/api/courses/${courseId}/resources/${id}`, { method: "DELETE" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete resource");
       return;
     }
     await load();
@@ -132,13 +125,11 @@ export function Step2Resources({
     setIsAddingVideo(true);
     setError(null);
     try {
-      const res = await fetch(`/api/courses/${courseId}/videos`, {
+      await fetchJson<Record<string, unknown>>(`/api/courses/${courseId}/videos`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url }),
       });
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(body.error || "Failed to add video");
       setVideoUrl("");
       await load();
     } catch (e) {
@@ -150,10 +141,10 @@ export function Step2Resources({
 
   async function deleteVideo(id: string) {
     setError(null);
-    const res = await fetch(`/api/courses/${courseId}/videos/${id}`, { method: "DELETE" });
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    if (!res.ok) {
-      setError(body.error || "Failed to delete video");
+    try {
+      await fetchJson<Record<string, unknown>>(`/api/courses/${courseId}/videos/${id}`, { method: "DELETE" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete video");
       return;
     }
     await load();

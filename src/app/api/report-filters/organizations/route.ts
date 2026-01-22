@@ -1,5 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -24,9 +26,20 @@ function humanizeSlug(slug: string): string {
 
 export async function GET(request: NextRequest) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
   if (!["super_admin", "system_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const url = new URL(request.url);
@@ -49,24 +62,27 @@ export async function GET(request: NextRequest) {
   }
 
   const { data, error: loadError, count } = await query;
-  if (loadError) return NextResponse.json({ error: loadError.message }, { status: 500 });
+  if (loadError) return apiError("INTERNAL", "Failed to load organizations.", { status: 500 });
 
   const orgs = Array.isArray(data) ? (data as Array<{ id: string; name?: string | null; slug?: string | null; is_active?: boolean | null }>) : [];
 
-  return NextResponse.json({
-    organizations: orgs,
-    items: orgs.map((o) => ({
-      id: o.id,
-      // Never expose IDs/slugs in the UI label.
-      label:
-        (o.name && o.name.trim().length > 0 ? o.name.trim() : null) ??
-        (o.slug && o.slug.trim().length > 0 ? humanizeSlug(o.slug) : null) ??
-        "Unnamed organization",
-      meta: o.is_active === false ? "Inactive" : "Active",
-    })),
-    page,
-    page_size: pageSize,
-    total: typeof count === "number" ? count : 0,
-  });
+  return apiOk(
+    {
+      organizations: orgs,
+      items: orgs.map((o) => ({
+        id: o.id,
+        // Never expose IDs/slugs in the UI label.
+        label:
+          (o.name && o.name.trim().length > 0 ? o.name.trim() : null) ??
+          (o.slug && o.slug.trim().length > 0 ? humanizeSlug(o.slug) : null) ??
+          "Unnamed organization",
+        meta: o.is_active === false ? "Inactive" : "Active",
+      })),
+      page,
+      page_size: pageSize,
+      total: typeof count === "number" ? count : 0,
+    },
+    { status: 200 }
+  );
 }
 

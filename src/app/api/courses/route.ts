@@ -1,21 +1,36 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { createCourseSchema, validateSchema } from "@/lib/validations/schemas";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 type CreatedCourse = { id: string };
 
 export async function POST(request: NextRequest) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const body = await request.json().catch(() => null);
   const validation = validateSchema(createCourseSchema, body);
   if (!validation.success) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: validation.error });
+    return apiError("VALIDATION_ERROR", validation.error, { status: 400 });
   }
 
   const { title, description, excerpt, visibility_scope, organization_ids } = validation.data;
@@ -40,7 +55,16 @@ export async function POST(request: NextRequest) {
 
   if (isOrgAdmin) {
     if (!caller.organization_id) {
-      return NextResponse.json({ error: "Forbidden: org admin missing organization" }, { status: 403 });
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Forbidden",
+        internalMessage: "org admin missing organization_id",
+      });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
     insertPayload = {
       ...insertPayload,
@@ -70,7 +94,16 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (insertError || !inserted) {
-    return NextResponse.json({ error: insertError?.message || "Failed to create course" }, { status: 500 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to create course.",
+      internalMessage: insertError?.message,
+    });
+    return apiError("INTERNAL", "Failed to create course.", { status: 500 });
   }
 
   const created = inserted as CreatedCourse;
@@ -84,10 +117,17 @@ export async function POST(request: NextRequest) {
       const { error: linkError } = await supabase.from("course_organizations").insert(rows);
       if (linkError) {
         // Best-effort rollback: keep the course (still manageable by admins); surface a clear error.
-        return NextResponse.json(
-          { error: `Course created but org visibility failed: ${linkError.message}`, course_id: created.id },
-          { status: 500 }
-        );
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 500,
+          code: "INTERNAL",
+          publicMessage: "Course created but org visibility failed.",
+          internalMessage: linkError.message,
+          details: { course_id: created.id },
+        });
+        return apiError("INTERNAL", "Course created but org visibility failed.", { status: 500 });
       }
     }
   }
@@ -110,6 +150,15 @@ export async function POST(request: NextRequest) {
     // ignore
   }
 
-  return NextResponse.json({ course_id: created.id }, { status: 201 });
+  await logApiEvent({
+    request,
+    caller,
+    outcome: "success",
+    status: 201,
+    publicMessage: "Course created.",
+    details: { course_id: created.id },
+  });
+
+  return apiOk({ course_id: created.id }, { status: 201, message: "Course created." });
 }
 

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Loader2, CheckCircle, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { fetchJson } from "@/lib/api";
 
 type TestRow = {
   id: string;
@@ -50,13 +51,13 @@ export function TestTakeClient({
   async function startAttempt() {
     setStarting(true);
     try {
-      const res = await fetch(`/api/tests/${test.id}/attempts/start`, { method: "POST" });
-      const body = (await res.json().catch(() => null)) as { attempt?: { id?: string } | null; error?: string } | null;
-      if (!res.ok) throw new Error(body?.error || "Failed to start attempt");
+      const { data: body, message } = await fetchJson<{ attempt: { id: string } }>(`/api/tests/${test.id}/attempts/start`, {
+        method: "POST",
+      });
       const id = body?.attempt?.id ?? null;
       if (!id) throw new Error("Missing attempt id");
       setAttemptId(id);
-      toast.success("Attempt started.");
+      toast.success(message || "Attempt started.");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to start attempt");
     } finally {
@@ -81,20 +82,16 @@ export function TestTakeClient({
     if (!attemptId) return;
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/test-attempts/${attemptId}/submit`, {
+      const { data: body, message } = await fetchJson<{ score: number; passed: boolean; pass_score: number }>(`/api/test-attempts/${attemptId}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answers }),
       });
-      const body = (await res.json().catch(() => null)) as
-        | { ok?: boolean; score?: number; passed?: boolean; pass_score?: number; error?: string }
-        | null;
-      if (!res.ok) throw new Error(body?.error || "Failed to submit");
       if (typeof body?.score !== "number" || typeof body?.passed !== "boolean" || typeof body?.pass_score !== "number") {
         throw new Error("Invalid response");
       }
       setResult({ score: body.score, passed: body.passed, pass_score: body.pass_score });
-      toast.success("Submitted.");
+      toast.success(message || "Submitted.");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to submit");
     } finally {

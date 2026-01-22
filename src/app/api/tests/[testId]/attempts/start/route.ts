@@ -1,15 +1,31 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
-export async function POST(_request: NextRequest, context: { params: Promise<{ testId: string }> }) {
+export async function POST(request: NextRequest, context: { params: Promise<{ testId: string }> }) {
   const { testId } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
-  if (caller.role !== "member") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  if (!caller.organization_id) return NextResponse.json({ error: "Missing organization" }, { status: 400 });
+  if (caller.role !== "member") {
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+  }
+  if (!caller.organization_id) return apiError("VALIDATION_ERROR", "Missing organization.", { status: 400 });
 
   // Load test using session client so RLS enforces:
   // - test is published
@@ -21,11 +37,11 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ t
     .eq("id", testId)
     .single();
 
-  if (testError || !test) return NextResponse.json({ error: testError?.message || "Test not found" }, { status: 404 });
-  if (test.is_published !== true) return NextResponse.json({ error: "Test not published" }, { status: 400 });
+  if (testError || !test) return apiError("NOT_FOUND", "Test not found.", { status: 404 });
+  if (test.is_published !== true) return apiError("VALIDATION_ERROR", "This test is not published yet.", { status: 400 });
 
   const courseId = test.course_id as string | null;
-  if (!courseId) return NextResponse.json({ error: "Test is missing course" }, { status: 500 });
+  if (!courseId) return apiError("INTERNAL", "Test is missing course.", { status: 500 });
 
   // Enforce: must complete all course items before starting test.
   const [{ data: resources }, { data: videos }, { data: progressRows }] = await Promise.all([
@@ -46,7 +62,7 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ t
     .filter((v): v is string => typeof v === "string");
 
   const total = resourceIds.length + videoIds.length;
-  if (total === 0) return NextResponse.json({ error: "Course has no content" }, { status: 400 });
+  if (total === 0) return apiError("VALIDATION_ERROR", "Course has no content.", { status: 400 });
 
   const completed = new Set<string>();
   for (const p of (Array.isArray(progressRows) ? progressRows : []) as Array<{
@@ -63,7 +79,7 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ t
 
   const missing =
     resourceIds.some((id) => !completed.has(`resource:${id}`)) || videoIds.some((id) => !completed.has(`video:${id}`));
-  if (missing) return NextResponse.json({ error: "Complete the course content before starting the test." }, { status: 400 });
+  if (missing) return apiError("VALIDATION_ERROR", "Complete the course content before starting the test.", { status: 400 });
 
   // Use admin client for attempt creation (members don't have insert policy on test_attempts).
   const admin = createAdminSupabaseClient();
@@ -75,13 +91,13 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ t
     .eq("test_id", testId)
     .eq("user_id", caller.id);
 
-  if (countError) return NextResponse.json({ error: countError.message }, { status: 500 });
+  if (countError) return apiError("INTERNAL", "Failed to start attempt.", { status: 500 });
 
   const maxAttempts = typeof test.max_attempts === "number" ? test.max_attempts : 1;
   const nextAttemptNumber = (attemptCount ?? 0) + 1;
 
   if (nextAttemptNumber > maxAttempts) {
-    return NextResponse.json({ error: "No attempts remaining." }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "No attempts remaining.", { status: 400 });
   }
 
   const now = new Date().toISOString();
@@ -101,16 +117,19 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ t
     .select("id, attempt_number, started_at")
     .single();
 
-  if (insError || !inserted) return NextResponse.json({ error: insError?.message || "Failed to start attempt" }, { status: 500 });
+  if (insError || !inserted) {
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to start attempt.", internalMessage: insError?.message });
+    return apiError("INTERNAL", "Failed to start attempt.", { status: 500 });
+  }
 
-  return NextResponse.json(
+  await logApiEvent({ request, caller, outcome: "success", status: 201, publicMessage: "Attempt started.", details: { test_id: testId, attempt_id: inserted.id } });
+  return apiOk(
     {
-      ok: true,
       attempt: inserted,
       max_attempts: maxAttempts,
       pass_score: test.pass_score,
     },
-    { status: 201 }
+    { status: 201, message: "Attempt started." }
   );
 }
 

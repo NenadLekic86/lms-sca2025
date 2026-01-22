@@ -44,9 +44,7 @@ export const useUsers = (organizationId?: string) => {
   const changeUserRole = async (userId: string, newRole: Role) => {
     const result = await usersApi.changeUserRole(userId, newRole);
     // Update local state
-    setUsers(users.map(u => 
-      u.id === userId ? { ...u, role: newRole } : u
-    ));
+    setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u)));
     return result;
   };
 
@@ -56,7 +54,7 @@ export const useUsers = (organizationId?: string) => {
   const disableUser = async (userId: string) => {
     const result = await usersApi.disableUser(userId);
     // Update local state (keep row visible for re-enable)
-    setUsers(users.map(u => (u.id === userId ? { ...u, is_active: false } : u)));
+    setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, is_active: false } : u)));
     return result;
   };
 
@@ -65,7 +63,7 @@ export const useUsers = (organizationId?: string) => {
    */
   const enableUser = async (userId: string) => {
     const result = await usersApi.enableUser(userId);
-    setUsers(users.map(u => (u.id === userId ? { ...u, is_active: true } : u)));
+    setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, is_active: true } : u)));
     return result;
   };
 

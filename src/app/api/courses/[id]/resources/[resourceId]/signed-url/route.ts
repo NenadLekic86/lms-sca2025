@@ -1,12 +1,25 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
-export async function GET(_request: NextRequest, context: { params: Promise<{ id: string; resourceId: string }> }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string; resourceId: string }> }) {
   const { id, resourceId } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   // Use session client to ensure the caller can RLS-read this resource row.
   // Members will only see resources for courses they are actively enrolled in.
@@ -19,7 +32,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
     .single();
 
   if (loadError || !resourceRow) {
-    return NextResponse.json({ error: loadError?.message || "Resource not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Resource not found.", { status: 404 });
   }
 
   // Signed URLs are generated with service role. Access is already enforced above via RLS read.
@@ -29,10 +42,10 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
     .createSignedUrl(resourceRow.storage_path, 60 * 10);
 
   if (signedError || !signed?.signedUrl) {
-    return NextResponse.json({ error: signedError?.message || "Failed to create signed URL" }, { status: 500 });
+    return apiError("INTERNAL", "Failed to create signed URL.", { status: 500 });
   }
 
-  return NextResponse.json(
+  return apiOk(
     {
       signedUrl: signed.signedUrl,
       file_name: resourceRow.file_name,

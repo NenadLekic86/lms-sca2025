@@ -1,5 +1,6 @@
 // User roles - single source of truth
-export type Role = 'super_admin' | 'system_admin' | 'organization_admin' | 'member';
+export const ROLES = ["super_admin", "system_admin", "organization_admin", "member"] as const;
+export type Role = (typeof ROLES)[number];
 
 // Permissions/capabilities
 export type Permission = 'manage_users' | 'manage_courses' | 'manage_tests' | 'manage_certificates';

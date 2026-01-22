@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { fetchJson } from "@/lib/api";
 
 type TestRow = {
   id: string;
@@ -43,17 +44,17 @@ export function Step3Assessment({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/courses/${courseId}/test`, { cache: "no-store" });
-      const body = (await res.json().catch(() => ({}))) as { test?: TestRow | null; questionCount?: number; error?: string };
-      if (!res.ok) throw new Error(body.error || "Failed to load assessment");
+      const { data: body } = await fetchJson<{ test?: TestRow | null; questionCount?: number }>(`/api/courses/${courseId}/test`, {
+        cache: "no-store",
+      });
 
       setTest(body.test ?? null);
       setQuestionCount(typeof body.questionCount === "number" ? body.questionCount : 0);
 
       if (body.test?.id) {
-        const res2 = await fetch(`/api/tests/${body.test.id}/builder`, { cache: "no-store" });
-        const b2 = (await res2.json().catch(() => ({}))) as { test?: TestRow; questions?: BuilderQuestion[]; error?: string };
-        if (!res2.ok) throw new Error(b2.error || "Failed to load assessment builder");
+        const { data: b2 } = await fetchJson<{ test?: TestRow; questions?: BuilderQuestion[] }>(`/api/tests/${body.test.id}/builder`, {
+          cache: "no-store",
+        });
         setQuestions(Array.isArray(b2.questions) ? b2.questions : []);
         setTest((prev) => (prev ? { ...prev, ...(b2.test ?? {}) } : (b2.test ?? null)));
       } else {
@@ -75,9 +76,7 @@ export function Step3Assessment({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/courses/${courseId}/test`, { method: "POST" });
-      const body = (await res.json().catch(() => ({}))) as { test?: TestRow; error?: string };
-      if (!res.ok) throw new Error(body.error || "Failed to create assessment");
+      await fetchJson<{ test: TestRow }>(`/api/courses/${courseId}/test`, { method: "POST" });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create assessment");
@@ -157,7 +156,7 @@ export function Step3Assessment({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/tests/${test.id}/builder`, {
+      await fetchJson<Record<string, unknown>>(`/api/tests/${test.id}/builder`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -169,8 +168,6 @@ export function Step3Assessment({
           questions,
         }),
       });
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(body.error || "Failed to save assessment");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save assessment");

@@ -14,8 +14,9 @@ import { Step1CourseInfo } from "@/features/courses/components/editor/Step1Cours
 import { Step2Resources } from "@/features/courses/components/editor/Step2Resources";
 import { Step3Assessment } from "@/features/courses/components/editor/Step3Assessment";
 import { Step4Publish } from "@/features/courses/components/editor/Step4Publish";
+import { fetchJson } from "@/lib/api";
+import type { Role } from "@/types";
 
-type Role = "super_admin" | "system_admin" | "organization_admin" | "member";
 type VisibilityScope = "all" | "organizations";
 
 export type CourseEditorCourse = {
@@ -175,13 +176,11 @@ export function CourseEditorForm({
 
   const patchCourse = async (payload: Record<string, unknown>) => {
     if (!course?.id) throw new Error("Missing course");
-    const res = await fetch(`/api/courses/${course.id}`, {
+    await fetchJson<Record<string, unknown>>(`/api/courses/${course.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const json = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(json?.error || "Failed to update course");
     router.refresh();
   };
 
@@ -204,13 +203,11 @@ export function CourseEditorForm({
           visibility_scope: canManageVisibility ? "organizations" : "organizations",
         };
 
-        const res = await fetch("/api/courses", {
+        const { data: json } = await fetchJson<{ course_id: string }>("/api/courses", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        const json = await res.json().catch(() => null);
-        if (!res.ok) throw new Error(json?.error || "Failed to create course");
         const id = String(json?.course_id || "");
         if (!id) throw new Error("Missing course id");
 
@@ -255,9 +252,7 @@ export function CourseEditorForm({
     try {
       const form = new FormData();
       form.append("file", coverFile);
-      const res = await fetch(`/api/courses/${course.id}/cover`, { method: "POST", body: form });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(json?.error || "Failed to upload cover image");
+      await fetchJson<Record<string, unknown>>(`/api/courses/${course.id}/cover`, { method: "POST", body: form });
       setCoverFile(null);
       router.refresh();
     } catch (e) {
@@ -305,17 +300,12 @@ export function CourseEditorForm({
 
     async function loadCompletion() {
       try {
-        const [rRes, vRes, tRes, cRes] = await Promise.all([
-          fetch(`/api/courses/${courseId}/resources`, { cache: "no-store" }),
-          fetch(`/api/courses/${courseId}/videos`, { cache: "no-store" }),
-          fetch(`/api/courses/${courseId}/test`, { cache: "no-store" }),
-          fetch(`/api/courses/${courseId}/certificate-template`, { cache: "no-store" }),
+        const [{ data: rBody }, { data: vBody }, { data: tBody }, { data: cBody }] = await Promise.all([
+          fetchJson<{ resources?: Array<unknown> }>(`/api/courses/${courseId}/resources`, { cache: "no-store" }),
+          fetchJson<{ videos?: Array<{ embed_url?: unknown }> }>(`/api/courses/${courseId}/videos`, { cache: "no-store" }),
+          fetchJson<{ questionCount?: number }>(`/api/courses/${courseId}/test`, { cache: "no-store" }),
+          fetchJson<{ template?: unknown }>(`/api/courses/${courseId}/certificate-template`, { cache: "no-store" }),
         ]);
-
-        const rBody = (await rRes.json().catch(() => ({}))) as { resources?: Array<unknown> };
-        const vBody = (await vRes.json().catch(() => ({}))) as { videos?: Array<{ embed_url?: unknown }> };
-        const tBody = (await tRes.json().catch(() => ({}))) as { questionCount?: number };
-        const cBody = (await cRes.json().catch(() => ({}))) as { template?: unknown };
 
         if (cancelled) return;
 

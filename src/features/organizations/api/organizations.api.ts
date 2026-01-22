@@ -1,3 +1,7 @@
+import { fetchJson } from "@/lib/api";
+
+type ApiResult<T> = T & { message?: string };
+
 export type Organization = {
   id: string;
   name?: string | null;
@@ -27,43 +31,27 @@ export type CreateOrganizationResponse = {
 export const organizationsApi = {
   async getOrganizations(options?: { includeCounts?: boolean }): Promise<GetOrganizationsResponse> {
     const url = options?.includeCounts ? "/api/organizations?include_counts=1" : "/api/organizations";
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || "Failed to load organizations");
-    }
-    return res.json();
+    const { data } = await fetchJson<GetOrganizationsResponse>(url, { cache: "no-store" });
+    return data;
   },
 
-  async createOrganization(input: { name: string; slug?: string }): Promise<CreateOrganizationResponse> {
-    const res = await fetch("/api/organizations", {
+  async createOrganization(input: { name: string; slug?: string }): Promise<ApiResult<CreateOrganizationResponse>> {
+    const { data, message } = await fetchJson<CreateOrganizationResponse>("/api/organizations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || "Failed to create organization");
-    }
-    return res.json();
+    return { ...data, message };
   },
 
-  async disableOrganization(orgId: string): Promise<{ message: string; organization_id: string }> {
-    const res = await fetch(`/api/organizations/${orgId}/disable`, { method: "PATCH" });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || "Failed to disable organization");
-    }
-    return res.json();
+  async disableOrganization(orgId: string): Promise<ApiResult<{ organization_id: string }>> {
+    const { data, message } = await fetchJson<{ organization_id: string }>(`/api/organizations/${orgId}/disable`, { method: "PATCH" });
+    return { ...data, message };
   },
 
-  async enableOrganization(orgId: string): Promise<{ message: string; organization_id: string }> {
-    const res = await fetch(`/api/organizations/${orgId}/enable`, { method: "PATCH" });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || "Failed to enable organization");
-    }
-    return res.json();
+  async enableOrganization(orgId: string): Promise<ApiResult<{ organization_id: string }>> {
+    const { data, message } = await fetchJson<{ organization_id: string }>(`/api/organizations/${orgId}/enable`, { method: "PATCH" });
+    return { ...data, message };
   },
 };
 

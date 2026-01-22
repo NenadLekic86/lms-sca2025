@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { emitNotificationToUsers } from "@/lib/notifications/server";
 import { updateCourseSchema, validateSchema } from "@/lib/validations/schemas";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 type CourseRow = {
   id: string;
@@ -17,10 +19,21 @@ type CourseRow = {
   created_by: string | null;
 };
 
-export async function GET(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   const supabase = await createServerSupabaseClient();
   const { data, error: loadError } = await supabase
@@ -32,19 +45,31 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
     .single();
 
   if (loadError || !data) {
-    return NextResponse.json({ error: loadError?.message || "Course not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Course not found.", { status: 404 });
   }
 
-  return NextResponse.json({ course: data as CourseRow });
+  return apiOk({ course: data as CourseRow }, { status: 200 });
 }
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const body = await request.json().catch(() => null);
@@ -53,7 +78,8 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
 
   const validation = validateSchema(updateCourseSchema, body);
   if (!validation.success) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: validation.error });
+    return apiError("VALIDATION_ERROR", validation.error, { status: 400 });
   }
 
   const supabase = await createServerSupabaseClient();
@@ -66,7 +92,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     .single();
 
   if (currentError || !current) {
-    return NextResponse.json({ error: currentError?.message || "Course not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Course not found.", { status: 404 });
   }
 
   const now = new Date().toISOString();
@@ -78,14 +104,17 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   // Org admin cannot edit global or assigned catalog courses; only org-owned courses.
   if (isOrgAdmin) {
     if (!caller.organization_id || (current as CourseRow).organization_id !== caller.organization_id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
     // Enforce non-global scope for org admins regardless of client payload
     if (hasBodyKey("visibility_scope") && patch.visibility_scope !== "organizations") {
-      return NextResponse.json({ error: "Forbidden: org admins cannot change visibility scope" }, { status: 403 });
+      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
     if (hasBodyKey("organization_ids")) {
-      return NextResponse.json({ error: "Forbidden: org admins cannot assign course organizations" }, { status: 403 });
+      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
   }
 
@@ -100,13 +129,10 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       .select("course_id", { count: "exact", head: true })
       .eq("course_id", id);
     if (countError) {
-      return NextResponse.json({ error: `Failed to validate visibility: ${countError.message}` }, { status: 500 });
+      return apiError("INTERNAL", "Failed to validate visibility.", { status: 500 });
     }
     if (!count || count < 1) {
-      return NextResponse.json(
-        { error: "Cannot publish: select at least one organization for this course" },
-        { status: 400 }
-      );
+      return apiError("VALIDATION_ERROR", "Cannot publish: select at least one organization for this course.", { status: 400 });
     }
   }
 
@@ -125,13 +151,10 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       .maybeSingle();
 
     if (tErr) {
-      return NextResponse.json({ error: `Failed to validate assessment: ${tErr.message}` }, { status: 500 });
+      return apiError("INTERNAL", "Failed to validate assessment.", { status: 500 });
     }
     if (!t?.id) {
-      return NextResponse.json(
-        { error: "Cannot publish: assessment test is missing. Create an assessment in Step 3." },
-        { status: 400 }
-      );
+      return apiError("VALIDATION_ERROR", "Cannot publish: assessment test is missing. Create an assessment in Step 3.", { status: 400 });
     }
 
     const { count, error: qErr } = await admin
@@ -139,14 +162,11 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       .select("id", { count: "exact", head: true })
       .eq("test_id", t.id);
     if (qErr) {
-      return NextResponse.json({ error: `Failed to validate assessment: ${qErr.message}` }, { status: 500 });
+      return apiError("INTERNAL", "Failed to validate assessment.", { status: 500 });
     }
     const qc = typeof count === "number" ? count : 0;
     if (qc < 1) {
-      return NextResponse.json(
-        { error: "Cannot publish: add at least 1 assessment question (Step 3)." },
-        { status: 400 }
-      );
+      return apiError("VALIDATION_ERROR", "Cannot publish: add at least 1 assessment question (Step 3).", { status: 400 });
     }
 
     latestTestForPublish = { id: t.id as string, is_published: (t as { is_published?: boolean | null }).is_published ?? null };
@@ -183,7 +203,8 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     .single();
 
   if (updateError || !updated) {
-    return NextResponse.json({ error: updateError?.message || "Failed to update course" }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to update course.", internalMessage: updateError?.message });
+    return apiError("INTERNAL", "Failed to update course.", { status: 500 });
   }
 
   // If super/system updated organization_ids, update join table
@@ -192,13 +213,13 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     // Replace strategy: delete all then insert new.
     const { error: delError } = await supabase.from("course_organizations").delete().eq("course_id", id);
     if (delError) {
-      return NextResponse.json({ error: `Course updated but failed to update organizations: ${delError.message}` }, { status: 500 });
+      return apiError("INTERNAL", "Course updated but failed to update organizations.", { status: 500 });
     }
     if (orgIds.length > 0) {
       const rows = orgIds.map((orgId) => ({ course_id: id, organization_id: orgId }));
       const { error: insError } = await supabase.from("course_organizations").insert(rows);
       if (insError) {
-        return NextResponse.json({ error: `Course updated but failed to update organizations: ${insError.message}` }, { status: 500 });
+        return apiError("INTERNAL", "Course updated but failed to update organizations.", { status: 500 });
       }
     }
   }
@@ -220,7 +241,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
         .limit(1)
         .maybeSingle();
       if (tErr) {
-        return NextResponse.json({ error: `Course updated but failed to load assessment: ${tErr.message}` }, { status: 500 });
+        return apiError("INTERNAL", "Course updated but failed to load assessment.", { status: 500 });
       }
       if (t2?.id) {
         t = { id: t2.id as string, is_published: (t2 as { is_published?: boolean | null }).is_published ?? null };
@@ -236,10 +257,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
           .select("id", { count: "exact", head: true })
           .eq("test_id", t.id);
         if (qErr) {
-          return NextResponse.json(
-            { error: `Course updated but failed to validate assessment: ${qErr.message}` },
-            { status: 500 }
-          );
+          return apiError("INTERNAL", "Course updated but failed to validate assessment.", { status: 500 });
         }
         qc = typeof count === "number" ? count : 0;
       }
@@ -247,10 +265,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       if ((qc ?? 0) > 0 && t.is_published !== true) {
         const { error: pubErr } = await admin.from("tests").update({ is_published: true }).eq("id", t.id);
         if (pubErr) {
-          return NextResponse.json(
-            { error: `Course updated but failed to publish assessment: ${pubErr.message}` },
-            { status: 500 }
-          );
+          return apiError("INTERNAL", "Course updated but failed to publish assessment.", { status: 500 });
         }
       }
     }
@@ -372,6 +387,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     }
   }
 
-  return NextResponse.json({ course: updated as CourseRow });
+  await logApiEvent({ request, caller, outcome: "success", status: 200, publicMessage: "Course updated.", details: { course_id: id } });
+  return apiOk({ course: updated as CourseRow }, { status: 200, message: "Course updated." });
 }
 

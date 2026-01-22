@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -36,25 +37,40 @@ function parsePublicObjectPath(publicUrl: string, bucket: string): string | null
 
 export async function POST(request: Request) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   const form = await request.formData().catch(() => null);
-  if (!form) return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
+  if (!form) {
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Invalid form data." });
+    return apiError("VALIDATION_ERROR", "Invalid form data.", { status: 400 });
+  }
 
   const file = form.get("file");
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "Missing file" }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Missing file." });
+    return apiError("VALIDATION_ERROR", "Missing file.", { status: 400 });
   }
 
   if (!ALLOWED_MIME.has(file.type)) {
-    return NextResponse.json(
-      { error: `Invalid file type. Allowed: ${Array.from(ALLOWED_MIME).join(", ")}` },
-      { status: 400 }
-    );
+    const msg = `Invalid file type. Allowed: ${Array.from(ALLOWED_MIME).join(", ")}`;
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: msg });
+    return apiError("VALIDATION_ERROR", msg, { status: 400 });
   }
 
   if (file.size > MAX_BYTES) {
-    return NextResponse.json({ error: "File too large (max 2MB)" }, { status: 400 });
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "File too large (max 2MB)." });
+    return apiError("VALIDATION_ERROR", "File too large (max 2MB).", { status: 400 });
   }
 
   const admin = createAdminSupabaseClient();
@@ -68,7 +84,8 @@ export async function POST(request: Request) {
     .single();
 
   if (currentErr || !currentUser) {
-    return NextResponse.json({ error: "Failed to load profile" }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to load profile.", internalMessage: currentErr?.message });
+    return apiError("INTERNAL", "Failed to load profile.", { status: 500 });
   }
 
   const previousAvatarUrl = (currentUser as { avatar_url?: unknown }).avatar_url;
@@ -87,7 +104,8 @@ export async function POST(request: Request) {
   });
 
   if (uploadError) {
-    return NextResponse.json({ error: `Upload failed: ${uploadError.message}` }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Upload failed.", internalMessage: uploadError.message });
+    return apiError("INTERNAL", "Upload failed.", { status: 500 });
   }
 
   const { data: publicUrlData } = admin.storage.from(bucket).getPublicUrl(objectPath);
@@ -102,7 +120,8 @@ export async function POST(request: Request) {
     .single();
 
   if (updateError || !updated) {
-    return NextResponse.json({ error: updateError?.message || "Failed to update profile" }, { status: 500 });
+    await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to update profile.", internalMessage: updateError?.message });
+    return apiError("INTERNAL", "Failed to update profile.", { status: 500 });
   }
 
   // Best-effort cleanup of previous object
@@ -137,18 +156,23 @@ export async function POST(request: Request) {
     // ignore
   }
 
-  return NextResponse.json(
-    {
-      message: "Avatar uploaded",
-      avatar_url: (updated as { avatar_url?: unknown }).avatar_url ?? null,
-    },
-    { status: 201 }
-  );
+  const nextAvatarUrl = ((updated as { avatar_url?: unknown }).avatar_url ?? null) as string | null;
+
+  await logApiEvent({
+    request,
+    caller,
+    outcome: "success",
+    status: 201,
+    publicMessage: "Avatar uploaded.",
+    details: { avatar_url: nextAvatarUrl },
+  });
+
+  return apiOk({ avatar_url: nextAvatarUrl }, { status: 201, message: "Avatar uploaded." });
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
 
   const admin = createAdminSupabaseClient();
   const bucket = "user-avatars";
@@ -161,7 +185,16 @@ export async function DELETE() {
     .single();
 
   if (currentErr || !currentUser) {
-    return NextResponse.json({ error: "Failed to load profile" }, { status: 500 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to load profile.",
+      internalMessage: currentErr?.message,
+    });
+    return apiError("INTERNAL", "Failed to load profile.", { status: 500 });
   }
 
   const previousAvatarUrl = (currentUser as { avatar_url?: unknown }).avatar_url;
@@ -174,7 +207,16 @@ export async function DELETE() {
     .eq("id", caller.id);
 
   if (updateError) {
-    return NextResponse.json({ error: updateError.message || "Failed to remove avatar" }, { status: 500 });
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to remove avatar.",
+      internalMessage: updateError.message,
+    });
+    return apiError("INTERNAL", "Failed to remove avatar.", { status: 500 });
   }
 
   if (previousPath) {
@@ -204,7 +246,15 @@ export async function DELETE() {
     // ignore
   }
 
-  return NextResponse.json({ message: "Avatar removed", avatar_url: null }, { status: 200 });
+  await logApiEvent({
+    request,
+    caller,
+    outcome: "success",
+    status: 200,
+    publicMessage: "Avatar removed.",
+  });
+
+  return apiOk({ avatar_url: null }, { status: 200, message: "Avatar removed." });
 }
 
 

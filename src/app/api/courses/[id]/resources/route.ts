@@ -1,5 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { apiError, apiOk } from "@/lib/api/response";
+import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
 
@@ -11,10 +13,21 @@ function sanitizeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 140);
 }
 
-export async function GET(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   // Use session client so RLS applies (members will only see enrolled resources).
   const supabase = await createServerSupabaseClient();
@@ -24,28 +37,40 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
     .eq("course_id", id)
     .order("created_at", { ascending: false });
 
-  if (loadError) return NextResponse.json({ error: loadError.message }, { status: 500 });
-  return NextResponse.json({ resources: Array.isArray(data) ? data : [] }, { status: 200 });
+  if (loadError) return apiError("INTERNAL", "Failed to load resources.", { status: 500 });
+  return apiOk({ resources: Array.isArray(data) ? data : [] }, { status: 200 });
 }
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();
-  if (error || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (error || !caller) {
+    await logApiEvent({
+      request,
+      caller: null,
+      outcome: "error",
+      status: 401,
+      code: "UNAUTHORIZED",
+      publicMessage: "Unauthorized",
+      internalMessage: typeof error === "string" ? error : "No authenticated user",
+    });
+    return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
+  }
 
   if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const form = await request.formData().catch(() => null);
-  if (!form) return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
+  if (!form) return apiError("VALIDATION_ERROR", "Invalid form data.", { status: 400 });
 
   const files = [
     ...form.getAll("files"),
     ...form.getAll("file"),
   ].filter((v): v is File => v instanceof File);
 
-  if (files.length === 0) return NextResponse.json({ error: "Missing file(s)" }, { status: 400 });
+  if (files.length === 0) return apiError("VALIDATION_ERROR", "Missing file(s).", { status: 400 });
 
   const admin = createAdminSupabaseClient();
   const { data: courseRow, error: courseError } = await admin
@@ -55,13 +80,14 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     .single();
 
   if (courseError || !courseRow) {
-    return NextResponse.json({ error: courseError?.message || "Course not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Course not found.", { status: 404 });
   }
 
   // Org admins can only manage org-owned courses
   if (caller.role === "organization_admin") {
     if (!caller.organization_id || courseRow.organization_id !== caller.organization_id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
   }
 
@@ -71,10 +97,10 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   const insertedRows: unknown[] = [];
   for (const file of files) {
     if (!isPdf(file)) {
-      return NextResponse.json({ error: "Only PDF files are allowed" }, { status: 400 });
+      return apiError("VALIDATION_ERROR", "Only PDF files are allowed.", { status: 400 });
     }
     if (file.size > maxBytes) {
-      return NextResponse.json({ error: "File too large (max 20MB)" }, { status: 400 });
+      return apiError("VALIDATION_ERROR", "File too large (max 20MB).", { status: 400 });
     }
 
     const ts = Date.now();
@@ -88,7 +114,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     });
 
     if (uploadRes.error) {
-      return NextResponse.json({ error: uploadRes.error.message }, { status: 500 });
+      await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Upload failed.", internalMessage: uploadRes.error.message });
+      return apiError("INTERNAL", "Upload failed.", { status: 500 });
     }
 
     const { data: inserted, error: insertError } = await admin
@@ -108,7 +135,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       .single();
 
     if (insertError || !inserted) {
-      return NextResponse.json({ error: insertError?.message || "Failed to save resource" }, { status: 500 });
+      await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to save resource.", internalMessage: insertError?.message });
+      return apiError("INTERNAL", "Failed to save resource.", { status: 500 });
     }
 
     // Best-effort audit log
@@ -129,6 +157,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     insertedRows.push(inserted);
   }
 
-  return NextResponse.json({ resources: insertedRows }, { status: 201 });
+  await logApiEvent({ request, caller, outcome: "success", status: 201, publicMessage: "Resources uploaded.", details: { course_id: id, count: insertedRows.length } });
+  return apiOk({ resources: insertedRows }, { status: 201, message: "Resources uploaded." });
 }
 

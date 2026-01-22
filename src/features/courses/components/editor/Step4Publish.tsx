@@ -4,6 +4,7 @@ import { Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { fetchJson } from "@/lib/api";
 
 type VisibilityScope = "all" | "organizations";
 
@@ -102,13 +103,14 @@ export function Step4Publish({
 
   async function loadTemplate() {
     setError(null);
-    const res = await fetch(`/api/courses/${courseId}/certificate-template`, { cache: "no-store" });
-    const body = (await res.json().catch(() => ({}))) as { template?: TemplateRow | null; error?: string };
-    if (!res.ok) {
-      setError(body.error || "Failed to load certificate template");
-      return;
+    try {
+      const { data: body } = await fetchJson<{ template?: TemplateRow | null }>(`/api/courses/${courseId}/certificate-template`, {
+        cache: "no-store",
+      });
+      setTemplate(body.template ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load certificate template");
     }
-    setTemplate(body.template ?? null);
   }
 
   async function loadOrgs() {
@@ -116,9 +118,7 @@ export function Step4Publish({
     setOrgsLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/organizations", { cache: "no-store" });
-      const body = (await res.json().catch(() => ({}))) as { organizations?: OrganizationRow[]; error?: string };
-      if (!res.ok) throw new Error(body.error || "Failed to load organizations");
+      const { data: body } = await fetchJson<{ organizations?: OrganizationRow[] }>("/api/organizations", { cache: "no-store" });
       setOrgs(Array.isArray(body.organizations) ? body.organizations : []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load organizations");
@@ -144,9 +144,7 @@ export function Step4Publish({
     try {
       const form = new FormData();
       form.append("file", tplFile);
-      const res = await fetch(`/api/courses/${courseId}/certificate-template`, { method: "POST", body: form });
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(body.error || "Failed to upload template");
+      await fetchJson<Record<string, unknown>>(`/api/courses/${courseId}/certificate-template`, { method: "POST", body: form });
       setTplFile(null);
       await loadTemplate();
     } catch (e) {
