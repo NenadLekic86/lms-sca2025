@@ -17,15 +17,13 @@ import { Step4Publish } from "@/features/courses/components/editor/Step4Publish"
 import { fetchJson } from "@/lib/api";
 import type { Role } from "@/types";
 
-type VisibilityScope = "all" | "organizations";
-
 export type CourseEditorCourse = {
   id: string;
   title: string | null;
   description: string | null;
   excerpt: string | null;
   is_published: boolean | null;
-  visibility_scope: VisibilityScope | null;
+  visibility_scope: "all" | "organizations" | null;
   cover_image_url: string | null;
   organization_id: string | null;
 };
@@ -36,30 +34,21 @@ export function CourseEditorForm({
   orgId,
   backHref,
   course,
-  initialOrganizationIds,
 }: {
   mode: "create" | "edit";
   actorRole: Role;
   orgId?: string;
   backHref: string;
   course?: CourseEditorCourse;
-  initialOrganizationIds?: string[];
 }) {
   const router = useRouter();
 
-  const canManageVisibility = actorRole === "super_admin" || actorRole === "system_admin";
   const isOrgAdmin = actorRole === "organization_admin";
 
   const [title, setTitle] = useState(course?.title ?? "");
   const [excerpt, setExcerpt] = useState(course?.excerpt ?? "");
   const [description, setDescription] = useState(course?.description ?? "");
   const [isPublished, setIsPublished] = useState<boolean>(course?.is_published ?? false);
-
-  const [visibilityScope, setVisibilityScope] = useState<VisibilityScope>(
-    (course?.visibility_scope ?? (isOrgAdmin ? "organizations" : "organizations")) as VisibilityScope
-  );
-
-  const [selectedOrgIds, setSelectedOrgIds] = useState<string[]>(initialOrganizationIds ?? []);
 
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -157,16 +146,11 @@ export function CourseEditorForm({
       progressScale: width > 0 ? progress / width : 0,
     });
   }, [activeStep]);
-  const visibilityOk = useMemo(() => {
-    if (!canManageVisibility) return true;
-    if (visibilityScope !== "organizations") return true;
-    return selectedOrgIds.length > 0;
-  }, [canManageVisibility, selectedOrgIds.length, visibilityScope]);
 
   const canPublishNow = useMemo(() => {
     // Step 4 completion includes certificate template + visibility selection.
-    return infoOk && resourcesOk && assessmentOk && publishStepOk && visibilityOk;
-  }, [assessmentOk, infoOk, publishStepOk, resourcesOk, visibilityOk]);
+    return infoOk && resourcesOk && assessmentOk && publishStepOk;
+  }, [assessmentOk, infoOk, publishStepOk, resourcesOk]);
 
   const validateClient = (): string | null => {
     if (!title || title.trim().length < 2) return "Title must be at least 2 characters.";
@@ -199,8 +183,6 @@ export function CourseEditorForm({
           title: title.trim(),
           excerpt: excerpt.trim(),
           description: description.trim(),
-          // Visibility can be set later in the Publish step.
-          visibility_scope: canManageVisibility ? "organizations" : "organizations",
         };
 
         const { data: json } = await fetchJson<{ course_id: string }>("/api/courses", {
@@ -213,14 +195,6 @@ export function CourseEditorForm({
 
         if (isOrgAdmin && orgId) {
           router.push(`/org/${orgId}/courses/${id}/edit`);
-          return true;
-        }
-        if (actorRole === "super_admin") {
-          router.push(`/admin/courses/${id}/edit`);
-          return true;
-        }
-        if (actorRole === "system_admin") {
-          router.push(`/system/courses/${id}/edit`);
           return true;
         }
         router.push(backHref);
@@ -274,12 +248,6 @@ export function CourseEditorForm({
       const payload: Record<string, unknown> = {
         is_published: Boolean(isPublished),
       };
-      if (canManageVisibility) {
-        payload.visibility_scope = visibilityScope;
-        if (visibilityScope === "organizations") {
-          payload.organization_ids = selectedOrgIds;
-        }
-      }
       await patchCourse(payload);
       return true;
     } catch (e) {
@@ -339,9 +307,9 @@ export function CourseEditorForm({
       { key: "info" as const, label: "Course Info", enabled: true, done: infoOk },
       { key: "resources" as const, label: "Resources", enabled: mode === "edit", done: resourcesOk },
       { key: "assessment" as const, label: "Assessment", enabled: mode === "edit", done: assessmentOk },
-      { key: "publish" as const, label: "Certificate & Publish", enabled: mode === "edit", done: publishStepOk && visibilityOk },
+      { key: "publish" as const, label: "Certificate & Publish", enabled: mode === "edit", done: publishStepOk },
     ],
-    [assessmentOk, infoOk, mode, publishStepOk, resourcesOk, visibilityOk]
+    [assessmentOk, infoOk, mode, publishStepOk, resourcesOk]
   );
 
   const enabledStepKeys = useMemo(() => steps.filter((s) => s.enabled).map((s) => s.key), [steps]);
@@ -554,11 +522,6 @@ export function CourseEditorForm({
             <Step4Publish
               courseId={course.id}
               actorRole={actorRole}
-              canManageVisibility={canManageVisibility}
-              visibilityScope={visibilityScope}
-              setVisibilityScope={setVisibilityScope}
-              selectedOrgIds={selectedOrgIds}
-              setSelectedOrgIds={setSelectedOrgIds}
               isPublished={isPublished}
               setIsPublished={setIsPublished}
               canPublishNow={canPublishNow}

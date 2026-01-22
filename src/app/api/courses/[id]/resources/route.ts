@@ -57,7 +57,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
   }
 
-  if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
+  if (caller.role !== "organization_admin") {
     await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
     return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
@@ -84,11 +84,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   }
 
   // Org admins can only manage org-owned courses
-  if (caller.role === "organization_admin") {
-    if (!caller.organization_id || courseRow.organization_id !== caller.organization_id) {
-      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
-      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
-    }
+  if (!caller.organization_id || courseRow.organization_id !== caller.organization_id) {
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const bucket = "course-resources";

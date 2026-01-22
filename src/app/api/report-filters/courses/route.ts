@@ -38,24 +38,14 @@ export async function GET(request: NextRequest) {
 
   const admin = createAdminSupabaseClient();
 
-  // For org admins, restrict list to:
-  // - org-owned courses (including draft + archived)
-  // - plus global/assigned courses that are NOT archived (because org admins shouldn't see archived global/assigned)
+  // Org-only courses:
+  // - org admins: only their org-owned courses (draft + archived included)
+  // - super/system: all courses (for reporting)
   let orgId: string | null = requestedOrgId;
-  let assignedIds: string[] = [];
 
   if (caller.role === "organization_admin") {
     if (!caller.organization_id) return apiError("VALIDATION_ERROR", "Missing organization.", { status: 400 });
     orgId = caller.organization_id;
-
-    const { data: assigned } = await admin
-      .from("course_organizations")
-      .select("course_id")
-      .eq("organization_id", orgId);
-
-    assignedIds = (Array.isArray(assigned) ? assigned : [])
-      .map((r: { course_id?: string | null }) => r.course_id)
-      .filter((v): v is string => typeof v === "string" && v.length > 0);
   }
 
   let query = admin
@@ -65,20 +55,10 @@ export async function GET(request: NextRequest) {
     .range(from, to);
 
   if (caller.role === "organization_admin") {
-    const orParts: string[] = [];
-    // org-owned courses: always include (even archived)
-    orParts.push(`organization_id.eq.${orgId}`);
-    // global courses: only if not archived
-    orParts.push(`and(visibility_scope.eq.all,is_archived.eq.false)`);
-    // assigned courses: only if not archived
-    if (assignedIds.length > 0) {
-      const inList = assignedIds.join(",");
-      orParts.push(`and(id.in.(${inList}),is_archived.eq.false)`);
-    }
-    query = query.or(orParts.join(","));
+    query = query.eq("organization_id", orgId);
   } else if (orgId) {
     // For system/super: optional org filter can help narrow results
-    query = query.or(`organization_id.eq.${orgId},and(visibility_scope.eq.all,organization_id.is.null)`);
+    query = query.eq("organization_id", orgId);
   }
 
   if (q.length > 0) {
@@ -109,8 +89,7 @@ export async function GET(request: NextRequest) {
         const archived = c.is_archived === true;
         const published = c.is_published === true;
         const status = archived ? "Archived" : (published ? "Published" : "Draft");
-        const scope = c.visibility_scope === "all" ? "Global" : "Org/Assigned";
-        return { id: c.id, label: title, meta: `${status} • ${scope}` };
+        return { id: c.id, label: title, meta: `${status}` };
       }),
       page,
       page_size: pageSize,

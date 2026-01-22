@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
   }
 
-  if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
+  if (caller.role !== "organization_admin") {
     await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
     return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
@@ -33,17 +33,26 @@ export async function POST(request: NextRequest) {
     return apiError("VALIDATION_ERROR", validation.error, { status: 400 });
   }
 
-  const { title, description, excerpt, visibility_scope, organization_ids } = validation.data;
+  const { title, description, excerpt } = validation.data;
 
   const supabase = await createServerSupabaseClient();
 
-  // org_admin can only create org-owned courses (never global / never selected-org catalog)
-  const isOrgAdmin = caller.role === "organization_admin";
-  const isSuperSystem = caller.role === "super_admin" || caller.role === "system_admin";
-
   const now = new Date().toISOString();
 
-  let insertPayload: Record<string, unknown> = {
+  if (!caller.organization_id) {
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 403,
+      code: "FORBIDDEN",
+      publicMessage: "Forbidden",
+      internalMessage: "org admin missing organization_id",
+    });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+  }
+
+  const insertPayload: Record<string, unknown> = {
     title,
     description,
     excerpt,
@@ -51,41 +60,9 @@ export async function POST(request: NextRequest) {
     is_published: false,
     created_at: now,
     updated_at: now,
+    organization_id: caller.organization_id,
+    visibility_scope: "organizations",
   };
-
-  if (isOrgAdmin) {
-    if (!caller.organization_id) {
-      await logApiEvent({
-        request,
-        caller,
-        outcome: "error",
-        status: 403,
-        code: "FORBIDDEN",
-        publicMessage: "Forbidden",
-        internalMessage: "org admin missing organization_id",
-      });
-      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
-    }
-    insertPayload = {
-      ...insertPayload,
-      organization_id: caller.organization_id,
-      visibility_scope: "organizations",
-    };
-  } else if (isSuperSystem) {
-    if (visibility_scope === "all") {
-      insertPayload = {
-        ...insertPayload,
-        organization_id: null,
-        visibility_scope: "all",
-      };
-    } else {
-      insertPayload = {
-        ...insertPayload,
-        organization_id: null,
-        visibility_scope: "organizations",
-      };
-    }
-  }
 
   const { data: inserted, error: insertError } = await supabase
     .from("courses")
@@ -108,30 +85,6 @@ export async function POST(request: NextRequest) {
 
   const created = inserted as CreatedCourse;
 
-  // For super/system: if visibility is "organizations", insert selected org visibility rows
-  if (isSuperSystem && visibility_scope === "organizations") {
-    const orgIds = Array.isArray(organization_ids) ? organization_ids : [];
-
-    if (orgIds.length > 0) {
-      const rows = orgIds.map((orgId) => ({ course_id: created.id, organization_id: orgId }));
-      const { error: linkError } = await supabase.from("course_organizations").insert(rows);
-      if (linkError) {
-        // Best-effort rollback: keep the course (still manageable by admins); surface a clear error.
-        await logApiEvent({
-          request,
-          caller,
-          outcome: "error",
-          status: 500,
-          code: "INTERNAL",
-          publicMessage: "Course created but org visibility failed.",
-          internalMessage: linkError.message,
-          details: { course_id: created.id },
-        });
-        return apiError("INTERNAL", "Course created but org visibility failed.", { status: 500 });
-      }
-    }
-  }
-
   // Best-effort audit log
   try {
     await supabase.from("audit_logs").insert({
@@ -142,8 +95,8 @@ export async function POST(request: NextRequest) {
       entity: "courses",
       entity_id: created.id,
       metadata: {
-        visibility_scope: isOrgAdmin ? "organizations" : visibility_scope,
-        organization_ids: isOrgAdmin ? [caller.organization_id] : (organization_ids ?? []),
+        visibility_scope: "organizations",
+        organization_id: caller.organization_id,
       },
     });
   } catch {

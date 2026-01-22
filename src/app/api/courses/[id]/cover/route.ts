@@ -26,7 +26,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
   }
 
-  if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
+  if (caller.role !== "organization_admin") {
     await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
     return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
@@ -53,21 +53,18 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   const admin = createAdminSupabaseClient();
 
   // Ensure caller is allowed to edit this course.
-  // - super/system: can edit any
   // - org admin: only courses owned by their org
-  if (caller.role === "organization_admin") {
-    const { data: row, error: rowError } = await admin
-      .from("courses")
-      .select("organization_id")
-      .eq("id", id)
-      .single();
-    if (rowError || !row) {
-      return apiError("NOT_FOUND", "Course not found.", { status: 404 });
-    }
-    if (!caller.organization_id || row.organization_id !== caller.organization_id) {
-      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
-      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
-    }
+  const { data: row, error: rowError } = await admin
+    .from("courses")
+    .select("organization_id")
+    .eq("id", id)
+    .single();
+  if (rowError || !row) {
+    return apiError("NOT_FOUND", "Course not found.", { status: 404 });
+  }
+  if (!caller.organization_id || row.organization_id !== caller.organization_id) {
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const ext = getExtFromMime(file.type);

@@ -56,32 +56,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     return apiError("FORBIDDEN", "This course is not published yet.", { status: 403 });
   }
 
-  // Match DB policy visibility logic:
-  // allow if:
-  // - visibility_scope = 'all', OR
-  // - course.organization_id = current_user_org(), OR
-  // - course is assigned to current_user_org() via course_organizations
-  const isGlobal = course.visibility_scope === "all";
+  // Org-only courses: allow enroll only for courses owned by the caller's org.
   const isOrgOwned = course.organization_id === orgId;
-  let isAssigned = false;
-
-  if (!isGlobal && !isOrgOwned) {
-    const { data: link, error: linkError } = await admin
-      .from("course_organizations")
-      .select("course_id")
-      .eq("course_id", id)
-      .eq("organization_id", orgId)
-      .maybeSingle();
-
-    if (linkError) {
-      await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Failed to check course access.", internalMessage: linkError.message });
-      return apiError("VALIDATION_ERROR", "Failed to check course access.", { status: 400 });
-    }
-
-    isAssigned = Boolean(link);
-  }
-
-  if (!isGlobal && !isOrgOwned && !isAssigned) {
+  if (!isOrgOwned) {
     await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
     return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }

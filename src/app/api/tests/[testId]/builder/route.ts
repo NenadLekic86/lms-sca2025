@@ -57,14 +57,12 @@ async function canManageTest(params: {
 
   if (testError || !testRow) return { ok: false as const, status: 404, error: testError?.message || "Test not found" };
 
-  if (!["super_admin", "system_admin", "organization_admin"].includes(params.caller.role)) {
+  if (params.caller.role !== "organization_admin") {
     return { ok: false as const, status: 403, error: "Forbidden" };
   }
 
-  if (params.caller.role === "organization_admin") {
-    if (!params.caller.organization_id || testRow.organization_id !== params.caller.organization_id) {
-      return { ok: false as const, status: 403, error: "Forbidden" };
-    }
+  if (!params.caller.organization_id || testRow.organization_id !== params.caller.organization_id) {
+    return { ok: false as const, status: 403, error: "Forbidden" };
   }
 
   return { ok: true as const, admin, testRow };

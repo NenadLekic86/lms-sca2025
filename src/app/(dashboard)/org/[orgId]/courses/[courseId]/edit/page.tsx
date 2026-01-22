@@ -52,7 +52,6 @@ export default async function OrgCourseEditPage({
       orgId={orgSlug}
       backHref={`/org/${orgSlug}/courses`}
       course={courseRow as CourseEditorCourse}
-      initialOrganizationIds={[]}
     />
   );
 }

@@ -69,21 +69,9 @@ export default async function OrgCourseDetailPage({
 
   const course = data as CourseRow;
 
-  // Keep org route context: ensure the course is visible to this org.
+  // Org-only courses: enforce org-owned constraint on org pages.
   const isOrgOwned = course.organization_id === orgId;
-  const isGlobal = course.visibility_scope === "all";
-  let isAssigned = false;
-  if (!isOrgOwned && !isGlobal) {
-    const { data: link } = await supabase
-      .from("course_organizations")
-      .select("course_id")
-      .eq("course_id", courseId)
-      .eq("organization_id", orgId)
-      .maybeSingle();
-    isAssigned = Boolean(link);
-  }
-
-  if (!isOrgOwned && !isGlobal && !isAssigned) {
+  if (!isOrgOwned) {
     redirect(`/org/${orgSlug}/courses`);
   }
 

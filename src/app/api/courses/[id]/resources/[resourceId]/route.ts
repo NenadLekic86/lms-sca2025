@@ -21,7 +21,7 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
     return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
   }
 
-  if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
+  if (caller.role !== "organization_admin") {
     await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
     return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
@@ -39,11 +39,9 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
     return apiError("NOT_FOUND", "Resource not found.", { status: 404 });
   }
 
-  if (caller.role === "organization_admin") {
-    if (!caller.organization_id || resourceRow.organization_id !== caller.organization_id) {
-      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
-      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
-    }
+  if (!caller.organization_id || resourceRow.organization_id !== caller.organization_id) {
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const { error: delError } = await admin.from("course_resources").delete().eq("id", resourceId);

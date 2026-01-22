@@ -91,8 +91,6 @@ export function DashboardHeader() {
   const coursesHref = useMemo(() => {
     const role = dbUser?.role ?? null;
     if (!role) return null;
-    if (role === "super_admin") return "/admin/courses";
-    if (role === "system_admin") return "/system/courses";
     if ((role === "organization_admin" || role === "member") && orgKey) {
       return role === "member" ? `/org/${orgKey}/my-courses` : `/org/${orgKey}/courses`;
     }
@@ -119,8 +117,9 @@ export function DashboardHeader() {
       if (n.type === "course_published") {
         const id = n.entity_id;
         if (!id) return null;
-        if (role === "super_admin") return `/admin/courses/${id}`;
-        if (role === "system_admin") return `/system/courses/${id}`;
+        // Courses module is blocked for super/system; keep them in Reports.
+        if (role === "super_admin") return `/admin/reports?courseId=${encodeURIComponent(id)}`;
+        if (role === "system_admin") return `/system/reports?courseId=${encodeURIComponent(id)}`;
         if ((role === "organization_admin" || role === "member") && orgKey) return `/org/${orgKey}/courses/${id}`;
         return null;
       }

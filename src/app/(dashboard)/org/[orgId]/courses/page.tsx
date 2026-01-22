@@ -73,35 +73,14 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
 
   const supabase = await createServerSupabaseClient();
 
-  // Ensure this org-scoped page stays org-scoped even for super/system.
-  // We show courses that are:
-  // - owned by this org (organization_id = orgId)
-  // - global (visibility_scope = 'all')
-  // - explicitly assigned to this org via course_organizations
-  const { data: assignedRows } = await supabase
-    .from("course_organizations")
-    .select("course_id")
-    .eq("organization_id", orgId);
-
-  const assignedIds = (Array.isArray(assignedRows) ? assignedRows : [])
-    .map((r: { course_id?: string | null }) => r.course_id)
-    .filter((v): v is string => typeof v === "string");
-
+  // Org-only courses: list only org-owned courses on org pages.
   const coursesQuery = supabase
     .from("courses")
     .select("id, title, description, excerpt, cover_image_url, created_at, is_published, visibility_scope, organization_id")
     .order("created_at", { ascending: false })
     .limit(200);
 
-  const orParts = [
-    `organization_id.eq.${orgId}`,
-    `visibility_scope.eq.all`,
-  ];
-  if (assignedIds.length > 0) {
-    orParts.push(`id.in.(${assignedIds.join(",")})`);
-  }
-
-  const { data: coursesData, error: coursesError } = await coursesQuery.or(orParts.join(","));
+  const { data: coursesData, error: coursesError } = await coursesQuery.eq("organization_id", orgId);
 
   const courses = (Array.isArray(coursesData) ? coursesData : []) as CourseRow[];
 

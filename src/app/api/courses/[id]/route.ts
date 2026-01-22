@@ -35,6 +35,11 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
   }
 
+  // Courses module is org-scoped; system/super should not access course records directly.
+  if (caller.role !== "organization_admin" && caller.role !== "member") {
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+  }
+
   const supabase = await createServerSupabaseClient();
   const { data, error: loadError } = await supabase
     .from("courses")
@@ -67,7 +72,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     return apiError("UNAUTHORIZED", "Unauthorized", { status: 401 });
   }
 
-  if (!["super_admin", "system_admin", "organization_admin"].includes(caller.role)) {
+  if (caller.role !== "organization_admin") {
     await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
     return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
@@ -99,7 +104,6 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   const patch = validation.data;
 
   const isOrgAdmin = caller.role === "organization_admin";
-  const isSuperSystem = caller.role === "super_admin" || caller.role === "system_admin";
 
   // Org admin cannot edit global or assigned catalog courses; only org-owned courses.
   if (isOrgAdmin) {
@@ -107,34 +111,11 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
       return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
-    // Enforce non-global scope for org admins regardless of client payload
-    if (hasBodyKey("visibility_scope") && patch.visibility_scope !== "organizations") {
-      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
-      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
-    }
-    if (hasBodyKey("organization_ids")) {
-      await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
-      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
-    }
   }
 
   // If the patch attempts to publish a selected-org course, ensure it has at least one organization assigned
   const wantsPublish = hasBodyKey("is_published") && patch.is_published === true;
-  const nextVisibility = (patch.visibility_scope ?? (current as CourseRow).visibility_scope) ?? "organizations";
   const publishTransition = wantsPublish && (current as CourseRow).is_published !== true;
-
-  if (wantsPublish && isSuperSystem && nextVisibility === "organizations") {
-    const { count, error: countError } = await supabase
-      .from("course_organizations")
-      .select("course_id", { count: "exact", head: true })
-      .eq("course_id", id);
-    if (countError) {
-      return apiError("INTERNAL", "Failed to validate visibility.", { status: 500 });
-    }
-    if (!count || count < 1) {
-      return apiError("VALIDATION_ERROR", "Cannot publish: select at least one organization for this course.", { status: 400 });
-    }
-  }
 
   // If publishing, ensure the course has a real assessment (test + at least 1 question).
   // Also: we will auto-publish the test after the course is updated, so members can see it under RLS.
@@ -184,15 +165,6 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   if (hasBodyKey("excerpt")) updatePayload.excerpt = patch.excerpt;
   if (hasBodyKey("is_published")) updatePayload.is_published = patch.is_published;
 
-  if (isSuperSystem) {
-    if (hasBodyKey("visibility_scope") && patch.visibility_scope) {
-      updatePayload.visibility_scope = patch.visibility_scope;
-      if (patch.visibility_scope === "all") {
-        updatePayload.organization_id = null;
-      }
-    }
-  }
-
   const { data: updated, error: updateError } = await supabase
     .from("courses")
     .update(updatePayload)
@@ -205,23 +177,6 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   if (updateError || !updated) {
     await logApiEvent({ request, caller, outcome: "error", status: 500, code: "INTERNAL", publicMessage: "Failed to update course.", internalMessage: updateError?.message });
     return apiError("INTERNAL", "Failed to update course.", { status: 500 });
-  }
-
-  // If super/system updated organization_ids, update join table
-  if (isSuperSystem && hasBodyKey("organization_ids")) {
-    const orgIds = Array.isArray(patch.organization_ids) ? patch.organization_ids : [];
-    // Replace strategy: delete all then insert new.
-    const { error: delError } = await supabase.from("course_organizations").delete().eq("course_id", id);
-    if (delError) {
-      return apiError("INTERNAL", "Course updated but failed to update organizations.", { status: 500 });
-    }
-    if (orgIds.length > 0) {
-      const rows = orgIds.map((orgId) => ({ course_id: id, organization_id: orgId }));
-      const { error: insError } = await supabase.from("course_organizations").insert(rows);
-      if (insError) {
-        return apiError("INTERNAL", "Course updated but failed to update organizations.", { status: 500 });
-      }
-    }
   }
 
   // When a course is (re)published, ensure the latest assessment test is also published.
@@ -325,43 +280,6 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
           .filter((v): v is string => typeof v === "string");
 
         orgUserIds = ids;
-      } else {
-        const scope = course.visibility_scope ?? nextVisibility;
-
-        if (scope === "all") {
-          const { data: users } = await admin
-            .from("users")
-            .select("id")
-            .in("role", ["organization_admin", "member"])
-            .not("organization_id", "is", null)
-            .or(activeFilter);
-
-          orgUserIds = (Array.isArray(users) ? users : [])
-            .map((r: { id?: string | null }) => r.id)
-            .filter((v): v is string => typeof v === "string");
-        } else {
-          const { data: links } = await admin
-            .from("course_organizations")
-            .select("organization_id")
-            .eq("course_id", id);
-
-          const orgIds = (Array.isArray(links) ? links : [])
-            .map((r: { organization_id?: string | null }) => r.organization_id)
-            .filter((v): v is string => typeof v === "string");
-
-          if (orgIds.length > 0) {
-            const { data: users } = await admin
-              .from("users")
-              .select("id")
-              .in("role", ["organization_admin", "member"])
-              .in("organization_id", orgIds)
-              .or(activeFilter);
-
-            orgUserIds = (Array.isArray(users) ? users : [])
-              .map((r: { id?: string | null }) => r.id)
-              .filter((v): v is string => typeof v === "string");
-          }
-        }
       }
 
       await emitNotificationToUsers({
