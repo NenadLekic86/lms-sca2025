@@ -1,9 +1,9 @@
-import { UserTable } from "@/features/users";
+import { UserTableV2 } from "@/features/users";
 
 export default function AllUsersPage() {
   return (
-    <div className="container mx-auto p-6">
-      <UserTable />
+    <div className="container mx-auto">
+      <UserTableV2 title="All Users" />
     </div>
   );
 }

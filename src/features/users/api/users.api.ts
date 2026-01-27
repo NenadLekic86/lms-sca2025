@@ -7,6 +7,7 @@ type ApiResult<T> = T & { message?: string };
 export interface ApiUser {
   id: string;
   full_name?: string | null;
+  avatar_url?: string | null;
   email: string;
   role: Role;
   // Present in get_all_users(); may be omitted by get_org_users()

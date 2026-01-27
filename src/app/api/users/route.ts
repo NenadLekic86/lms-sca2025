@@ -89,7 +89,7 @@ export async function GET(request: NextRequest) {
       const admin = createAdminSupabaseClient();
       const { data: extra, error: extraError } = await admin
         .from('users')
-        .select('id, is_active, full_name, onboarding_status, invited_at, activated_at')
+        .select('id, is_active, full_name, avatar_url, onboarding_status, invited_at, activated_at')
         .in('id', ids);
 
       if (!extraError && Array.isArray(extra)) {
@@ -98,6 +98,7 @@ export async function GET(request: NextRequest) {
           {
             is_active: boolean | null;
             full_name: string | null;
+            avatar_url: string | null;
             onboarding_status: string | null;
             invited_at: string | null;
             activated_at: string | null;
@@ -107,6 +108,7 @@ export async function GET(request: NextRequest) {
           const id = (r as { id?: unknown }).id;
           const isActive = (r as { is_active?: unknown }).is_active;
           const fullName = (r as { full_name?: unknown }).full_name;
+          const avatarUrl = (r as { avatar_url?: unknown }).avatar_url;
           const onboardingStatus = (r as { onboarding_status?: unknown }).onboarding_status;
           const invitedAt = (r as { invited_at?: unknown }).invited_at;
           const activatedAt = (r as { activated_at?: unknown }).activated_at;
@@ -114,6 +116,7 @@ export async function GET(request: NextRequest) {
             map.set(id, {
               is_active: typeof isActive === 'boolean' ? isActive : null,
               full_name: typeof fullName === 'string' ? fullName : null,
+              avatar_url: typeof avatarUrl === "string" ? avatarUrl : null,
               onboarding_status: typeof onboardingStatus === 'string' ? onboardingStatus : null,
               invited_at: typeof invitedAt === 'string' ? invitedAt : null,
               activated_at: typeof activatedAt === 'string' ? activatedAt : null,
@@ -124,6 +127,7 @@ export async function GET(request: NextRequest) {
           const v = map.get(u.id);
           u.is_active = v?.is_active ?? null;
           u.full_name = v?.full_name ?? null;
+          (u as unknown as { avatar_url?: string | null }).avatar_url = v?.avatar_url ?? null;
           u.onboarding_status = v?.onboarding_status ?? null;
           u.invited_at = v?.invited_at ?? null;
           u.activated_at = v?.activated_at ?? null;

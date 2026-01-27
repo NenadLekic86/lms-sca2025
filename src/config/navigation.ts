@@ -64,7 +64,6 @@ export const NAVIGATION: Record<Role, NavItem[]> = {
     { label: 'Dashboard', href: '/admin', iconKey: "LayoutDashboard" },
     { label: 'My Profile', href: '/admin/profile', iconKey: "User" },
     { label: 'Organizations', href: '/admin/organizations', iconKey: "Building2" },
-    { label: 'System Admins', href: '/admin/system-admins', iconKey: "ShieldCheck" },
     { label: 'All Users', href: '/admin/users', iconKey: "Users" },
     { label: 'Certificates', href: '/admin/certificates', iconKey: "Award" },
     { label: 'Reports', href: '/admin/reports', iconKey: "BarChart3" },
@@ -78,8 +77,7 @@ export const NAVIGATION: Record<Role, NavItem[]> = {
     { label: 'Dashboard', href: '/system', iconKey: "LayoutDashboard" },
     { label: 'My Profile', href: '/system/profile', iconKey: "User" },
     { label: 'Organizations', href: '/system/organizations', iconKey: "Building2" },
-    { label: 'Org Admins', href: '/system/org-admins', iconKey: "UserCog" },
-    { label: 'Users', href: '/system/users', iconKey: "Users" },
+    { label: 'All Users', href: '/system/users', iconKey: "Users" },
     { label: 'Certificates', href: '/system/certificates', iconKey: "Award" },
     { label: 'Reports', href: '/system/reports', iconKey: "BarChart3" },
     { label: 'Export Data', href: '/system/export', iconKey: "Download" },
@@ -89,7 +87,7 @@ export const NAVIGATION: Record<Role, NavItem[]> = {
   organization_admin: [
     { label: 'Dashboard', href: '/org/{orgId}', iconKey: "LayoutDashboard" },
     { label: 'My Profile', href: '/org/{orgId}/profile', iconKey: "User" },
-    { label: 'Users', href: '/org/{orgId}/users', iconKey: "Users" },
+    { label: 'All Users', href: '/org/{orgId}/users', iconKey: "Users" },
     { label: 'Courses', href: '/org/{orgId}/courses', iconKey: "BookOpen" },
     { label: 'Tests', href: '/org/{orgId}/tests', iconKey: "ClipboardList" },
     { label: 'Certificates', href: '/org/{orgId}/certificates', iconKey: "Award" },
@@ -101,7 +99,7 @@ export const NAVIGATION: Record<Role, NavItem[]> = {
   // 👤 MEMBER - End user
   member: [
     { label: 'My Dashboard', href: '/org/{orgId}', iconKey: "LayoutDashboard" },
-    { label: 'Courses', href: '/org/{orgId}/courses', iconKey: "BookOpen" },
+    { label: 'All Courses', href: '/org/{orgId}/courses', iconKey: "BookOpen" },
     { label: 'My Courses', href: '/org/{orgId}/my-courses', iconKey: "BookOpen" },
     { label: 'My Tests', href: '/org/{orgId}/my-tests', iconKey: "ClipboardList" },
     { label: 'My Certificates', href: '/org/{orgId}/certificates', iconKey: "Award" },

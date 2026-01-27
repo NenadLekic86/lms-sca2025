@@ -2,7 +2,7 @@
 
 import { useAuth } from "@/lib/hooks/useAuth";
 import Link from "next/link";
-import { Bell, BookOpen, Globe, LogOut, Palette, Settings, User } from "lucide-react";
+import { Bell, BookOpen, ChevronDown, LogOut, Palette, Settings, User } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppBranding from "../ui/AppBranding";
@@ -34,6 +34,8 @@ export function DashboardHeader() {
   const router = useRouter();
   const [avatarError, setAvatarError] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
+  const [language, setLanguage] = useState<"EN" | "SR" | "FR">("EN");
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const isLoggedIn = !!user && !!dbUser?.role;
 
@@ -74,6 +76,7 @@ export function DashboardHeader() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifRef = useRef<HTMLDivElement | null>(null);
+  const languageMenuRef = useRef<HTMLDivElement | null>(null);
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
 
   const profileHref = useMemo(() => {
@@ -228,6 +231,29 @@ export function DashboardHeader() {
     };
   }, [profileMenuOpen]);
 
+  // Close language menu on outside click / escape
+  useEffect(() => {
+    if (!languageMenuOpen) return;
+
+    const onMouseDown = (e: MouseEvent) => {
+      const el = languageMenuRef.current;
+      if (!el) return;
+      if (e.target instanceof Node && el.contains(e.target)) return;
+      setLanguageMenuOpen(false);
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLanguageMenuOpen(false);
+    };
+
+    document.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [languageMenuOpen]);
+
   const handleLogout = useCallback(async () => {
     if (isLoggingOut) return;
     setIsLoggingOut(true);
@@ -248,7 +274,7 @@ export function DashboardHeader() {
   }, [isLoggingOut]);
 
   return (
-    <header className="sticky top-0 z-99999 border-b bg-background">
+    <header className="sticky top-0 z-99999">
       <div className="flex h-full items-center justify-between px-6 py-1">
         <div className="flex items-center gap-3">
           <div className="origin-left">
@@ -257,18 +283,9 @@ export function DashboardHeader() {
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Language Switcher */}
-          <button 
-            className="flex items-center gap-2 text-sm text-foreground hover:text-secondary transition-colors hover:cursor-pointer"
-            aria-label="Change language"
-          >
-            <Globe size={20} />
-            {/* TODO: Implement language switching */}
-          </button>
-
           {/* Notifications (only if logged in) */}
           {isLoggedIn ? (
-            <div ref={notifRef} className="relative">
+            <div ref={notifRef} className="relative mr-4">
               <button
                 type="button"
                 className="relative flex items-center gap-2 text-sm text-foreground hover:text-secondary transition-colors hover:cursor-pointer"
@@ -279,7 +296,7 @@ export function DashboardHeader() {
               >
                 <Bell size={20} />
                 {unreadCount > 0 ? (
-                  <span className="absolute -top-1 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] leading-[18px] text-center">
+                  <span className="absolute -top-1 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] leading-[16px] text-center">
                     {unreadCount > 9 ? "9+" : unreadCount}
                   </span>
                 ) : null}
@@ -373,12 +390,65 @@ export function DashboardHeader() {
             </div>
           ) : null}
 
+          {/* Language (only if logged in) */}
+          {isLoggedIn ? (
+            <div ref={languageMenuRef} className="relative">
+              <button
+                type="button"
+                className="flex items-center gap-1 px-3 py-2 min-h-[42px] min-w-[64px] text-sm text-foreground hover:cursor-pointer border-l border-r border-gray-200"
+                aria-label="Change language"
+                aria-haspopup="menu"
+                aria-expanded={languageMenuOpen}
+                onClick={() => setLanguageMenuOpen((v) => !v)}
+              >
+                <span className="tabular-nums">{language}</span>
+                <ChevronDown
+                  size={16}
+                  className={`transition-transform ${languageMenuOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+
+              {languageMenuOpen ? (
+                <div
+                  role="menu"
+                  className="absolute right-0 mt-3 w-[180px] rounded-lg border bg-background shadow-lg overflow-hidden z-50"
+                >
+                  {[
+                    { code: "EN" as const, label: "English" },
+                    { code: "SR" as const, label: "Serbian" },
+                    { code: "FR" as const, label: "French" },
+                  ].map((opt) => {
+                    const active = opt.code === language;
+                    return (
+                      <button
+                        key={opt.code}
+                        type="button"
+                        role="menuitem"
+                        className={`group w-full flex items-center justify-between gap-3 px-4 py-2.5 text-sm transition-colors cursor-pointer ${
+                          active ? "bg-primary text-white font-medium hover:text-white hover:bg-primary" : "text-foreground hover:text-white hover:bg-primary/90"
+                        }`}
+                        onClick={() => {
+                          setLanguage(opt.code);
+                          setLanguageMenuOpen(false);
+                          // TODO: Implement actual language switching/i18n
+                        }}
+                      >
+                        <span className={`tabular-nums ${active ? "text-white" : "text-foreground group-hover:text-white"}`}>{opt.code}</span>
+                        <span className={`${active ? "text-white" : "text-foreground group-hover:text-white"}`}>{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           {/* User Profile (only if logged in) */}
           {isLoggedIn && (
             <div ref={profileMenuRef} className="relative">
               <button 
                 type="button"
-                className="flex items-center gap-2 text-sm text-foreground hover:text-secondary transition-colors hover:cursor-pointer"
+                className="min-w-[160px] max-w-[280px] flex flex-row items-center gap-2 px-2 py-1 text-sm text-foreground hover:cursor-pointer"
                 aria-label="Open profile menu"
                 aria-haspopup="menu"
                 aria-expanded={profileMenuOpen}
@@ -389,12 +459,21 @@ export function DashboardHeader() {
                   <img
                     src={dbUser.avatar_url}
                     alt="Avatar"
-                    className="h-8 w-8 rounded-full object-cover border"
+                    className="h-8 w-8 shrink-0 rounded-full object-cover"
                     onError={() => setAvatarError(true)}
                   />
                 ) : (
-                  <User size={20} />
+                  <div className="h-8 w-8 shrink-0 rounded-full flex items-center justify-center bg-background text-muted-foreground">
+                    <User size={18} />
+                  </div>
                 )}
+
+                <span className="min-w-0 truncate text-center font-medium">{displayName}</span>
+
+                <ChevronDown
+                  size={18}
+                  className={`shrink-0 text-foreground transition-transform ${profileMenuOpen ? "rotate-180" : ""}`}
+                />
               </button>
 
               {profileMenuOpen ? (
@@ -402,7 +481,7 @@ export function DashboardHeader() {
                   role="menu"
                   className="absolute right-0 mt-3 w-[320px] rounded-lg border bg-background shadow-lg overflow-hidden z-50"
                 >
-                  <div className="px-4 py-3 border-b bg-muted/30">
+                  <div className="px-4 py-3 border-b bg-primary">
                     <div className="flex items-center gap-3">
                       {dbUser?.avatar_url && !avatarError ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -413,14 +492,14 @@ export function DashboardHeader() {
                           onError={() => setAvatarError(true)}
                         />
                       ) : (
-                        <div className="h-10 w-10 rounded-full border flex items-center justify-center bg-background text-muted-foreground">
+                        <div className="h-10 w-10 rounded-full border flex items-center justify-center bg-background text-white">
                           <User size={18} />
                         </div>
                       )}
                       <div className="min-w-0">
-                        <div className="font-medium text-foreground truncate">{displayName}</div>
+                        <div className="font-medium text-white truncate">{displayName}</div>
                         {roleLabel ? (
-                          <div className="text-xs text-muted-foreground truncate">{roleLabel}</div>
+                          <div className="text-xs text-white truncate">{roleLabel}</div>
                         ) : null}
                       </div>
                     </div>
@@ -431,10 +510,10 @@ export function DashboardHeader() {
                       <Link
                         href={profileHref}
                         role="menuitem"
-                        className="flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted/40 transition-colors"
+                        className="group flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-primary/90 hover:text-white transition-colors"
                         onClick={() => setProfileMenuOpen(false)}
                       >
-                        <User size={18} className="text-muted-foreground" />
+                        <User size={18} className="text-muted-foreground group-hover:text-white" />
                         <span>Profile</span>
                       </Link>
                     ) : null}
@@ -442,26 +521,26 @@ export function DashboardHeader() {
                     <Link
                       href="#"
                       role="menuitem"
-                      className="flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted/40 transition-colors"
+                      className="group flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-primary/90 hover:text-white transition-colors"
                       onClick={(e) => {
                         e.preventDefault();
                         setProfileMenuOpen(false);
                       }}
                     >
-                      <Settings size={18} className="text-muted-foreground" />
+                      <Settings size={18} className="text-muted-foreground group-hover:text-white" />
                       <span>Settings</span>
                     </Link>
 
                     <Link
                       href="#"
                       role="menuitem"
-                      className="flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted/40 transition-colors"
+                      className="group flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-primary/90 hover:text-white transition-colors"
                       onClick={(e) => {
                         e.preventDefault();
                         setProfileMenuOpen(false);
                       }}
                     >
-                      <Palette size={18} className="text-muted-foreground" />
+                      <Palette size={18} className="text-muted-foreground group-hover:text-white" />
                       <span>Theme</span>
                     </Link>
 
@@ -469,10 +548,10 @@ export function DashboardHeader() {
                       <Link
                         href={coursesHref}
                         role="menuitem"
-                        className="flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted/40 transition-colors"
+                        className="group flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-primary/90 hover:text-white transition-colors"
                         onClick={() => setProfileMenuOpen(false)}
                       >
-                        <BookOpen size={18} className="text-muted-foreground" />
+                        <BookOpen size={18} className="text-muted-foreground group-hover:text-white" />
                         <span>{coursesLabel}</span>
                       </Link>
                     ) : null}
@@ -482,14 +561,14 @@ export function DashboardHeader() {
                     <button
                       type="button"
                       role="menuitem"
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted/40 transition-colors disabled:opacity-60 hover:cursor-pointer"
+                      className="group w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-primary/90 hover:text-white transition-colors disabled:opacity-60 hover:cursor-pointer"
                       onClick={async () => {
                         setProfileMenuOpen(false);
                         await handleLogout();
                       }}
                       disabled={isLoggingOut}
                     >
-                      <LogOut size={18} className="text-muted-foreground" />
+                      <LogOut size={18} className="text-muted-foreground group-hover:text-white" />
                       <span>{isLoggingOut ? "Logging out..." : "Logout"}</span>
                     </button>
                   </div>

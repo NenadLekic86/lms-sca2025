@@ -67,49 +67,60 @@ export function DashboardSidebarClient({ menuItems, canLogout }: DashboardSideba
 
   return (
     <aside
-      className={`
-        ${collapsed ? "w-[70px]" : "w-[260px]"}
-        shrink-0 bg-primary text-white flex flex-col h-[calc(100vh-4rem)] sticky top-16 z-60
-        transition-[width] duration-200 ease-in-out
+      className={`shrink-0 bg-primary text-white flex flex-col h-[calc(100vh-4rem)] sticky top-16 z-60
+        transition-all duration-200 ease-in-out
+        ${collapsed ? "w-[70px] rounded-tr-[50px]" : "w-[260px] rounded-tr-[100px]"}
       `}
     >
-      {/* Collapse toggle */}
-      <div className="p-4 mb-7 relative flex items-center justify-end">
-        <div className="relative group">
-          <button
-            type="button"
-            onClick={() => setCollapsed((v) => !v)}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            ref={collapseToggleRef}
-            onMouseEnter={() => {
-              const el = collapseToggleRef.current;
-              if (!el) return;
-              const rect = el.getBoundingClientRect();
-              const shouldFlip = rect.left < 140;
-              setCollapseTooltipSide(shouldFlip ? "right" : "left");
-            }}
-            className="inline-flex items-center justify-center rounded-md p-2 text-white/90 ring-1 ring-white/15 bg-white/5 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
-          >
-            {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-          </button>
-          <span
-            className={`pointer-events-none absolute top-1/2 -translate-y-1/2 whitespace-nowrap rounded px-2 py-1 text-xs text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100 bg-[#222] ${
-              collapseTooltipSide === "left" ? "right-full mr-2" : "left-full ml-2"
-            }`}
-          >
-            {collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          </span>
-        </div>
-      </div>
-
       {/* Navigation - only show on dashboard routes, and only if user is logged in and has a role */}
       {isDashboardRoute && menuItems.length > 0 && (
         <nav
           className={`
             flex-1 min-h-0 overflow-y-auto space-y-1
-            ${collapsed ? "px-2" : "px-4"}
+            ${collapsed ? "px-2" : "pl-4 pr-0"}
+            pt-4
           `}
         >
+          {/* Collapse toggle (styled like nav item) */}
+          <div className="relative group">
+            <button
+              type="button"
+              onClick={() => setCollapsed((v) => !v)}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              ref={collapseToggleRef}
+              onMouseEnter={() => {
+                const el = collapseToggleRef.current;
+                if (!el) return;
+                const rect = el.getBoundingClientRect();
+                const shouldFlip = rect.left < 140;
+                setCollapseTooltipSide(shouldFlip ? "right" : "left");
+              }}
+              className={`
+                w-full flex items-center rounded-md transition-colors
+                ${collapsed ? "justify-center px-0 py-3" : "gap-3 px-3 py-2.5"}
+                text-white/80 hover:text-white cursor-pointer
+              `}
+            >
+              {collapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
+              {collapsed ? (
+                <span className="sr-only">{collapsed ? "Expand" : "Collapse"}</span>
+              ) : (
+                <span className="truncate">{collapsed ? "Expand" : "Collapse"}</span>
+              )}
+            </button>
+
+            {/* Tooltip only really matters when collapsed (label is hidden) */}
+            {/* <span
+              className={`pointer-events-none absolute top-1/2 -translate-y-1/2 whitespace-nowrap rounded px-2 py-1 text-xs text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100 bg-[#222] ${
+                collapseTooltipSide === "left" ? "right-full mr-2" : "left-full ml-2"
+              }`}
+            >
+              {collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            </span> */}
+          </div>
+
+          <div className="my-2 border-t border-white/10" />
+
           {menuItems.map((item) => {
             const Icon = NAV_ICONS[item.iconKey] ?? NAV_ICONS.LayoutDashboard;
             const isActive = activeHref === item.href;
@@ -120,10 +131,10 @@ export function DashboardSidebarClient({ menuItems, canLogout }: DashboardSideba
                 href={item.href}
                 title={collapsed ? item.label : undefined}
                 className={`
-                  flex items-center rounded-md transition-colors
-                  ${collapsed ? "justify-center px-0 py-3" : "gap-3 px-3 py-2.5"}
+                  flex items-center rounded-l-md transition-colors
+                  ${collapsed ? "justify-center px-0 py-3 rounded-r-md" : "gap-3 px-3 py-2.5"}
                   ${isActive 
-                    ? "bg-white/20 text-white font-medium" 
+                    ? "bg-white text-primary hover:text-primary hover:bg-white font-medium" 
                     : "text-white/80 hover:bg-white/10 hover:text-white"
                   }
                 `}
@@ -141,7 +152,7 @@ export function DashboardSidebarClient({ menuItems, canLogout }: DashboardSideba
             <button
               title={collapsed ? "Logout" : undefined}
               className={`
-                flex items-center rounded-md transition-colors text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50 mt-10 w-full cursor-pointer
+                flex items-center rounded-md transition-colors text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50 mt-5 w-full cursor-pointer
                 ${collapsed ? "justify-center px-0 py-3 w-full" : "gap-3 px-3 py-2.5 w-full"}
               `}
               onClick={handleLogout}

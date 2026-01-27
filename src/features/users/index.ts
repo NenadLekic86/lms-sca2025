@@ -1,5 +1,6 @@
 // Components
 export * from './components/UserTable';
+export * from './components/UserTableV2';
 export * from './components/UserForm';
 export * from './components/UserRow';
 export * from './components/ProfileForm';
