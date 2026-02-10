@@ -53,6 +53,10 @@
   /* Accent */
   --accent: var(--brand-highlight);
   --accent-foreground: var(--brand-text);
+
+  /* Destructive (used by shadcn variants like bg-destructive) */
+  --destructive: #dc2626; /* red-600 */
+  --destructive-foreground: var(--brand-white);
   
   /* Sidebar specific */
   --sidebar-bg: var(--brand-primary);

@@ -68,6 +68,16 @@ export const useUsers = (organizationId?: string) => {
   };
 
   /**
+   * Operational delete a user (tombstone + scrub + remove from reports/exports)
+   */
+  const deleteUser = async (userId: string) => {
+    const result = await usersApi.deleteUser(userId);
+    // Deleted users should disappear from the list (RPC excludes deleted_at users).
+    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    return result;
+  };
+
+  /**
    * Resend an invite email to a user
    */
   const resendInvite = async (userId: string) => {
@@ -128,6 +138,7 @@ export const useUsers = (organizationId?: string) => {
     changeUserRole,
     disableUser,
     enableUser,
+    deleteUser,
     resendInvite,
     assignOrganization,
     bulkAssignOrganization,

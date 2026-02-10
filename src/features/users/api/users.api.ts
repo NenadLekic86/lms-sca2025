@@ -41,6 +41,10 @@ export interface EnableUserResponse {
   user_id: string;
 }
 
+export interface DeleteUserResponse {
+  user_id: string;
+}
+
 export interface ResendInviteResponse {
   ok: true;
 }
@@ -126,6 +130,14 @@ export const usersApi = {
    */
   async enableUser(userId: string): Promise<ApiResult<EnableUserResponse>> {
     const { data, message } = await fetchJson<EnableUserResponse>(`/api/users/${userId}/enable`, { method: "PATCH" });
+    return { ...data, message };
+  },
+
+  /**
+   * Operational delete a user (tombstone + scrub + remove from reports/exports).
+   */
+  async deleteUser(userId: string): Promise<ApiResult<DeleteUserResponse>> {
+    const { data, message } = await fetchJson<DeleteUserResponse>(`/api/users/${userId}/delete`, { method: "DELETE" });
     return { ...data, message };
   },
 

@@ -3,8 +3,6 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { redirect } from "next/navigation";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
-import { RecentExportsTableV2, type RecentExportItemV2 } from "@/components/table-v2/RecentExportsTableV2";
-import { asRecord, exportLabel, getMetaString, roleLabel } from "@/lib/audit/exportHelpers";
 
 export const fetchCache = "force-no-store";
 
@@ -14,8 +12,6 @@ type ExportAuditRow = {
   action?: string | null;
   actor_email?: string | null;
   actor_role?: string | null;
-  entity?: string | null;
-  entity_id?: string | null;
   metadata?: unknown;
 };
 
@@ -42,6 +38,47 @@ function buildPager(current: number, total: number): Array<number | "ellipsis"> 
     out.push(p);
   }
   return out;
+}
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+function getMetaString(m: Record<string, unknown> | null, key: string): string | null {
+  const val = m?.[key];
+  return typeof val === "string" && val.trim().length > 0 ? val.trim() : null;
+}
+
+function roleLabel(role: string | null) {
+  switch (role) {
+    case "super_admin":
+      return "Super Admin";
+    case "system_admin":
+      return "System Admin";
+    case "organization_admin":
+      return "Organization Admin";
+    case "member":
+      return "Member";
+    default:
+      return role ?? "";
+  }
+}
+
+function exportLabel(action: string | null) {
+  switch (action) {
+    case "export_users":
+      return "Users (CSV)";
+    case "export_enrollments":
+      return "Course progress / Enrollments (CSV)";
+    case "export_certificates":
+      return "Certificates (CSV)";
+    case "export_courses":
+      return "Courses (CSV)";
+    case "export_organizations":
+      return "Organizations (CSV)";
+    default:
+      return action ?? "Export";
+  }
 }
 
 export default async function SystemExportPage({
@@ -75,7 +112,7 @@ export default async function SystemExportPage({
 
   const { data: auditData, error: auditError } = await admin
     .from("audit_logs")
-    .select("id, created_at, action, actor_email, actor_role, entity, entity_id, metadata")
+    .select("id, created_at, action, actor_email, actor_role, metadata")
     .in("action", exportActions)
     .order("created_at", { ascending: false })
     .range(exportsFromIdx, exportsToIdx);
@@ -88,7 +125,6 @@ export default async function SystemExportPage({
     const meta = asRecord(r.metadata);
     const oid = getMetaString(meta, "organization_id");
     if (oid) orgIds.add(oid);
-    if (r.entity === "organizations" && typeof r.entity_id === "string" && r.entity_id.length > 0) orgIds.add(r.entity_id);
   }
 
   const orgLabelById = new Map<string, string>();
@@ -270,34 +306,40 @@ export default async function SystemExportPage({
             No export history yet. Exports are logged when you download a CSV above.
           </div>
         ) : (
-          <div className="px-6 py-6">
-            <RecentExportsTableV2
-              items={rows.map((r): RecentExportItemV2 => {
-                const meta = asRecord(r.metadata);
-                const orgId =
-                  (r.entity === "organizations" && typeof r.entity_id === "string" && r.entity_id.length > 0)
-                    ? r.entity_id
-                    : getMetaString(meta, "organization_id");
-                const who = r.actor_email ? `${r.actor_email}${r.actor_role ? ` (${roleLabel(r.actor_role)})` : ""}` : "—";
-                const when = r.created_at ? new Date(r.created_at).toLocaleString() : "—";
-                const what = exportLabel(r.action ?? null);
-                const orgLabel = orgId ? (orgLabelById.get(orgId) ?? orgId) : null;
+          <>
+            <div className="w-full overflow-x-auto">
+              <table className="min-w-max w-full">
+              <thead className="bg-muted/50 border-b">
+                <tr>
+                  <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Timestamp</th>
+                  <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">What</th>
+                  <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Who</th>
+                  <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Organization</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {rows.map((r) => {
+                  const meta = asRecord(r.metadata);
+                  const orgId = getMetaString(meta, "organization_id");
+                  const who = r.actor_email
+                    ? `${r.actor_email}${r.actor_role ? ` (${roleLabel(r.actor_role)})` : ""}`
+                    : "—";
+                  const when = r.created_at ? new Date(r.created_at).toLocaleString() : "—";
+                  const orgLabel = orgId ? (orgLabelById.get(orgId) ?? orgId) : "—";
 
-                return {
-                  id: r.id,
-                  time: when,
-                  what,
-                  who,
-                  organization: orgLabel,
-                  scope: r.entity ?? null,
-                  scopeId: r.entity_id ?? null,
-                  meta: r.metadata ?? null,
-                };
-              })}
-              emptyTitle="No export history yet."
-              emptySubtitle="Exports are logged when you download a CSV above."
-            />
-          </div>
+                  return (
+                    <tr key={r.id} className="hover:bg-muted/30 transition-colors">
+                      <td className="px-6 py-4 text-sm text-muted-foreground font-mono whitespace-nowrap">{when}</td>
+                      <td className="px-6 py-4 text-sm text-foreground">{exportLabel(r.action ?? null)}</td>
+                      <td className="px-6 py-4 text-sm text-muted-foreground">{who}</td>
+                      <td className="px-6 py-4 text-sm text-muted-foreground">{orgLabel}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              </table>
+            </div>
+          </>
         )}
 
         {/* Pagination */}

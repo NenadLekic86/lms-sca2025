@@ -4,6 +4,7 @@ import { LayoutDashboard, Users, BookOpen, ClipboardList, Award, TrendingUp } fr
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 import { fetchEnrollmentTestSummary, formatDurationSeconds } from "@/services/reporting.service";
+import { RecentActivityTableV2, type RecentActivityItemV2 } from "@/components/table-v2/RecentActivityTableV2";
 
 type Stat = { label: string; value: string; icon: typeof Users; color: string; error?: string | null };
 
@@ -439,44 +440,34 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
               <p className="text-sm mt-2">Enrollments, test submissions and certificates will appear here.</p>
             </div>
           ) : (
-            <div className="rounded-lg border">
-              <div className="w-full overflow-x-auto">
-                <table className="min-w-max w-full">
-                <thead className="bg-muted/50 border-b">
-                  <tr>
-                    <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Time</th>
-                    <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Event</th>
-                    <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">User</th>
-                    <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Course</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {activityEvents.map((e, idx) => {
-                    const time = e.ts ? new Date(e.ts).toLocaleString() : "-";
-                    const userLabel = e.user_label;
-                    const courseLabel = e.course_label;
-                    let eventLabel = "";
-                    if (e.type === "enrolled") eventLabel = "Enrolled";
-                    else if (e.type === "certificate_issued") eventLabel = "Certificate issued";
-                    else eventLabel = e.passed === true ? "Test passed" : e.passed === false ? "Test failed" : "Test submitted";
-                    const extra = e.type === "test_submitted" && typeof e.score === "number" ? ` • ${e.score}%` : "";
+            <RecentActivityTableV2
+              items={activityEvents.map((e, idx): RecentActivityItemV2 => {
+                const time = e.ts ? new Date(e.ts).toLocaleString() : "-";
+                const actor = e.user_label; // Option 1: Actor = user_label
+                const subject = e.course_label; // Option 1: Subject = course_label
 
-                    return (
-                      <tr key={`${e.type}-${e.ts}-${idx}`} className="hover:bg-muted/30 transition-colors">
-                        <td className="px-4 py-3 text-xs text-muted-foreground font-mono whitespace-nowrap">{time}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">
-                          {eventLabel}
-                          <span className="text-muted-foreground">{extra}</span>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground">{userLabel}</td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground">{courseLabel}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                </table>
-              </div>
-            </div>
+                let title = "";
+                if (e.type === "enrolled") title = "Enrolled";
+                else if (e.type === "certificate_issued") title = "Certificate issued";
+                else title = e.passed === true ? "Test passed" : e.passed === false ? "Test failed" : "Test submitted";
+
+                const scoreText = e.type === "test_submitted" && typeof e.score === "number" ? `Score: ${e.score}%` : null;
+                const testText = e.test_label ? `Test: ${e.test_label}` : null;
+                const details = [testText, scoreText].filter((v): v is string => typeof v === "string" && v.length > 0).join("\n");
+
+                return {
+                  id: `${e.type}-${e.ts}-${idx}`,
+                  time,
+                  actor,
+                  subject,
+                  title,
+                  details: details.length ? details : null,
+                  meta: e,
+                };
+              })}
+              emptyTitle="No recent activity yet."
+              emptySubtitle="Enrollments, test submissions and certificates will appear here."
+            />
           )}
         </div>
       </div>

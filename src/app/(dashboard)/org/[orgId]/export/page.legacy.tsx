@@ -4,8 +4,6 @@ import { Button } from "@/components/ui/button";
 import { notFound, redirect } from "next/navigation";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
-import { RecentExportsTableV2, type RecentExportItemV2 } from "@/components/table-v2/RecentExportsTableV2";
-import { exportLabel, roleLabel } from "@/lib/audit/exportHelpers";
 
 export const fetchCache = "force-no-store";
 
@@ -15,8 +13,6 @@ type ExportAuditRow = {
   action?: string | null;
   actor_email?: string | null;
   actor_role?: string | null;
-  entity?: string | null;
-  entity_id?: string | null;
   metadata?: unknown;
 };
 
@@ -96,7 +92,7 @@ export default async function OrgExportPage({
 
   const { data: auditData, error: auditError } = await admin
     .from("audit_logs")
-    .select("id, created_at, action, actor_email, actor_role, entity, entity_id, metadata")
+    .select("id, created_at, action, actor_email, actor_role, metadata")
     .in("action", exportActions)
     .eq("entity", "organizations")
     .eq("entity_id", orgId)
@@ -109,6 +105,38 @@ export default async function OrgExportPage({
     const u = new URLSearchParams();
     u.set("exports_page", String(p));
     return `?${u.toString()}`;
+  };
+
+  const roleLabel = (role: string | null) => {
+    switch (role) {
+      case "super_admin":
+        return "Super Admin";
+      case "system_admin":
+        return "System Admin";
+      case "organization_admin":
+        return "Organization Admin";
+      case "member":
+        return "Member";
+      default:
+        return role ?? "";
+    }
+  };
+
+  const exportLabel = (action: string | null) => {
+    switch (action) {
+      case "export_users":
+        return "Users (CSV)";
+      case "export_enrollments":
+        return "Course progress / Enrollments (CSV)";
+      case "export_certificates":
+        return "Certificates (CSV)";
+      case "export_courses":
+        return "Courses (CSV)";
+      case "export_organizations":
+        return "Organizations (CSV)";
+      default:
+        return action ?? "Export";
+    }
   };
 
   return (
@@ -217,27 +245,34 @@ export default async function OrgExportPage({
             No export history yet. Your CSV exports will appear here after you download them above.
           </div>
         ) : (
-          <div className="px-6 py-6">
-            <RecentExportsTableV2
-              items={recentExports.map((r): RecentExportItemV2 => {
-                const who = r.actor_email ? `${r.actor_email}${r.actor_role ? ` (${roleLabel(r.actor_role)})` : ""}` : "—";
-                const when = r.created_at ? new Date(r.created_at).toLocaleString() : "—";
-                const what = exportLabel(r.action ?? null);
-                return {
-                  id: r.id,
-                  time: when,
-                  what,
-                  who,
-                  organization: null,
-                  scope: r.entity ?? "organizations",
-                  scopeId: r.entity_id ?? orgId,
-                  meta: r.metadata ?? null,
-                };
-              })}
-              emptyTitle="No export history yet."
-              emptySubtitle="Your CSV exports will appear here after you download them above."
-            />
-          </div>
+          <>
+            <div className="w-full overflow-x-auto">
+              <table className="min-w-max w-full">
+              <thead className="bg-muted/50 border-b">
+                <tr>
+                  <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Timestamp</th>
+                  <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">What</th>
+                  <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Who</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {recentExports.map((r) => {
+                  const who = r.actor_email
+                    ? `${r.actor_email}${r.actor_role ? ` (${roleLabel(r.actor_role)})` : ""}`
+                    : "—";
+                  const when = r.created_at ? new Date(r.created_at).toLocaleString() : "—";
+                  return (
+                    <tr key={r.id} className="hover:bg-muted/30 transition-colors">
+                      <td className="px-6 py-4 text-sm text-muted-foreground font-mono whitespace-nowrap">{when}</td>
+                      <td className="px-6 py-4 text-sm text-foreground">{exportLabel(r.action ?? null)}</td>
+                      <td className="px-6 py-4 text-sm text-muted-foreground">{who}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              </table>
+            </div>
+          </>
         )}
 
         {/* Pagination */}

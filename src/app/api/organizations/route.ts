@@ -96,7 +96,8 @@ export async function GET(request: NextRequest) {
   try {
     const { data: usersData, error: usersError } = await admin
       .from("users")
-      .select("organization_id, is_active");
+      .select("organization_id, is_active")
+      .is("deleted_at", null);
     if (usersError) {
       usersCountError = usersError.message;
     } else {

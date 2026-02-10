@@ -3,6 +3,7 @@ import Link from "next/link";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RecentActivityTableV2, type RecentActivityItemV2 } from "@/components/table-v2/RecentActivityTableV2";
 
 type Stat = { label: string; value: string; icon: LucideIcon; color: string; error?: string | null };
 
@@ -722,38 +723,18 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
             </div>
           ) : (
             <>
-              <div className="rounded-lg border">
-                <div className="w-full overflow-x-auto">
-                  <table className="min-w-max w-full">
-                  <thead className="bg-muted/50">
-                    <tr>
-                      <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Time</th>
-                      <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Action</th>
-                      <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Details</th>
-                      <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Subject</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {auditRows.map((row) => (
-                      <tr key={row.id} className="hover:bg-muted/30 transition-colors">
-                        <td className="px-4 py-2 text-xs text-muted-foreground font-mono">
-                          {row.created_at ? new Date(row.created_at).toLocaleString() : "-"}
-                        </td>
-                        <td className="px-4 py-2 text-xs text-muted-foreground">
-                          {row.action ?? "-"}
-                        </td>
-                        <td className="px-4 py-2 text-xs text-muted-foreground">
-                          {getDetails(row)}
-                        </td>
-                        <td className="px-4 py-2 text-xs text-muted-foreground">
-                          {getSubjectDisplay(row)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  </table>
-                </div>
-              </div>
+              <RecentActivityTableV2
+                items={auditRows.map((row): RecentActivityItemV2 => {
+                  const time = row.created_at ? new Date(row.created_at).toLocaleString() : "-";
+                  const actor =
+                    row.actor_email ? `${row.actor_email}${row.actor_role ? ` (${roleLabel(row.actor_role)})` : ""}` : "-";
+                  const subject = getSubjectDisplay(row);
+                  const title = row.action ?? "—";
+                  const details = getDetails(row);
+                  return { id: row.id, time, actor, subject, title, details, meta: row.metadata ?? null };
+                })}
+                emptyTitle="No activity yet."
+              />
 
               <div className="mt-4 flex items-center justify-between gap-3 text-sm">
                 <div className="text-muted-foreground">

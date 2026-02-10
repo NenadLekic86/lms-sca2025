@@ -230,6 +230,15 @@ function canAssignOrg(callerRole: Role | null, targetRole: Role): boolean {
   return callerRole === "super_admin" || callerRole === "system_admin";
 }
 
+function canDeleteUser(callerRole: Role | null, targetRole: Role): boolean {
+  if (!callerRole) return false;
+  if (callerRole === "member") return false;
+  if (targetRole === "super_admin") return false;
+  // Safety: org admins can delete members only (server enforces org match).
+  if (callerRole === "organization_admin") return targetRole === "member";
+  return callerRole === "super_admin" || callerRole === "system_admin";
+}
+
 function allowedRoleOptions(callerRole: Role | null): Role[] {
   // UI-level guard; server enforces regardless.
   if (!callerRole) return ["member"];
@@ -270,6 +279,7 @@ export function UserTableV2({
     changeUserRole,
     disableUser,
     enableUser,
+    deleteUser,
     resendInvite,
     assignOrganization,
     bulkAssignOrganization,
@@ -1318,6 +1328,10 @@ export function UserTableV2({
                 const res = await enableUser(userId);
                 return { message: res.message };
               }}
+              onDelete={async (userId) => {
+                const res = await deleteUser(userId);
+                return { message: res.message };
+              }}
               onResendInvite={async (userId) => {
                 const res = await resendInvite(userId);
                 return { message: res.message };
@@ -1355,6 +1369,10 @@ export function UserTableV2({
           }}
           onEnable={async (userId) => {
             const res = await enableUser(userId);
+            return { message: res.message };
+          }}
+          onDelete={async (userId) => {
+            const res = await deleteUser(userId);
             return { message: res.message };
           }}
           onResendInvite={async (userId) => {
@@ -1445,6 +1463,7 @@ function UserDetailsDrawer(props: {
   onAssignOrganization: (userId: string, orgId: string) => Promise<{ message?: string }>;
   onDisable: (userId: string) => Promise<{ message?: string }>;
   onEnable: (userId: string) => Promise<{ message?: string }>;
+  onDelete: (userId: string) => Promise<{ message?: string }>;
   onResendInvite: (userId: string) => Promise<{ message?: string }>;
   onPasswordSetupLink: (userId: string) => Promise<{ message?: string }>;
 }) {
@@ -1463,6 +1482,7 @@ function UserDetailsDrawer(props: {
   const canEdit = canEditRole(callerRole, user.role);
   const canOrg = canAssignOrg(callerRole, user.role);
   const canSetup = canSendSetupLink(callerRole, user.role);
+  const canDelete = canDeleteUser(callerRole, user.role);
 
   const isEnabled = user.is_active !== false;
   const isPending = isEnabled && user.onboarding_status === "pending";
@@ -1865,6 +1885,45 @@ function UserDetailsDrawer(props: {
                       <HelpText>Restores access so the user can log in again.</HelpText>
                     </div>
                   )}
+
+                  {canDelete ? (
+                    <div className="flex flex-col items-start gap-1 max-w-[320px]">
+                      <Button
+                        variant="destructive"
+                        disabled={isBusy}
+                        className="bg-red-800 text-white hover:bg-red-900"
+                        onClick={async () => {
+                          const ok = confirm(
+                            "Permanently delete this user?\n\nThis will remove them from reports/exports and scrub personal data. This cannot be undone."
+                          );
+                          if (!ok) return;
+
+                          const typed = prompt('Type DELETE to confirm this deletion.', "");
+                          if ((typed ?? "").trim() !== "DELETE") {
+                            alert("Deletion cancelled.");
+                            return;
+                          }
+
+                          setIsBusy(true);
+                          const t = toast.loading("Deleting user…");
+                          try {
+                            const res = await props.onDelete(user.id);
+                            toast.success(res.message || "User deleted.", { id: t });
+                            onClose();
+                          } catch (e) {
+                            toast.error(e instanceof Error ? e.message : "Failed to delete user", { id: t });
+                          } finally {
+                            setIsBusy(false);
+                          }
+                        }}
+                      >
+                        Delete user
+                      </Button>
+                      <HelpText>
+                        Requires typing <span className="font-mono">DELETE</span> to confirm. This action is irreversible.
+                      </HelpText>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -2033,6 +2092,7 @@ function MobileUserCard(props: {
   onAssignOrganization: (userId: string, orgId: string) => Promise<{ message?: string }>;
   onDisable: (userId: string) => Promise<{ message?: string }>;
   onEnable: (userId: string) => Promise<{ message?: string }>;
+  onDelete: (userId: string) => Promise<{ message?: string }>;
   onResendInvite: (userId: string) => Promise<{ message?: string }>;
   onPasswordSetupLink: (userId: string) => Promise<{ message?: string }>;
 }) {
@@ -2053,6 +2113,7 @@ function MobileUserCard(props: {
   const canResend = isPending || (!!user.invited_at && !user.activated_at);
   const canEdit = canEditRole(callerRole, user.role);
   const canOrg = canAssignOrg(callerRole, user.role);
+  const canDelete = canDeleteUser(callerRole, user.role);
 
   const org = user.organization_id ? organizations.find((o) => o.id === user.organization_id) ?? null : null;
   const orgInfo =
@@ -2438,6 +2499,45 @@ function MobileUserCard(props: {
                       <HelpText className={selected ? "text-white/80" : ""}>Restores access so the user can log in again.</HelpText>
                     </div>
                   )}
+
+                  {canDelete ? (
+                    <div className="flex flex-col items-start gap-1 max-w-[320px]">
+                      <Button
+                        variant="destructive"
+                        disabled={busy}
+                        className="bg-red-800 text-white hover:bg-red-900"
+                        onClick={async () => {
+                          const ok = confirm(
+                            "Permanently delete this user?\n\nThis will remove them from reports/exports and scrub personal data. This cannot be undone."
+                          );
+                          if (!ok) return;
+
+                          const typed = prompt('Type DELETE to confirm this deletion.', "");
+                          if ((typed ?? "").trim() !== "DELETE") {
+                            alert("Deletion cancelled.");
+                            return;
+                          }
+
+                          setBusy(true);
+                          const t = toast.loading("Deleting user…");
+                          try {
+                            const res = await props.onDelete(user.id);
+                            toast.success(res.message || "User deleted.", { id: t });
+                            props.onToggleOpen(false);
+                          } catch (e) {
+                            toast.error(e instanceof Error ? e.message : "Failed to delete user", { id: t });
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        Delete user
+                      </Button>
+                      <HelpText className={selected ? "text-white/80" : ""}>
+                        Requires typing <span className="font-mono">DELETE</span> to confirm. This action is irreversible.
+                      </HelpText>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>

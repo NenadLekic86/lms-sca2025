@@ -47,6 +47,7 @@ export async function GET(request: NextRequest) {
   let query = admin
     .from("users")
     .select("id, email, full_name, role, organization_id, is_active", { count: "exact" })
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .range(from, to);
 

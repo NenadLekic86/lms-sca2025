@@ -6,14 +6,13 @@ import { Button } from "@/components/ui/button";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 import { ReportFiltersClient } from "@/features/reporting/components/ReportFiltersClient";
+import { RecentEnrollmentsTableV2, type RecentEnrollmentItemV2 } from "@/components/table-v2/RecentEnrollmentsTableV2";
 import {
   fetchOrgReportStats,
   fetchEnrollmentsDaily,
   fetchEnrollmentTestSummaryPage,
   fetchTopCourses,
   fetchTopUsersByPasses,
-  formatCourseResult,
-  formatDurationSeconds,
 } from "@/services/reporting.service";
 
 export const fetchCache = "force-no-store";
@@ -216,18 +215,18 @@ export default async function OrgReportsPage({
         }}
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map((c) => {
           const Icon = c.icon;
           return (
             <div key={c.label} className="bg-card border rounded-lg p-6 shadow-sm">
-              <div className="flex items-center justify-between">
-                <div>
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
                   <p className="text-sm text-muted-foreground">{c.label}</p>
                   <p className="text-3xl font-bold text-foreground mt-1">{c.value}</p>
                   <p className="text-xs text-muted-foreground mt-1">Live</p>
                 </div>
-                <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center">
+                <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                   <Icon className="h-6 w-6 text-primary" />
                 </div>
               </div>
@@ -308,65 +307,40 @@ export default async function OrgReportsPage({
       <div className="bg-card border rounded-lg p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-foreground mb-4">Enrollments</h2>
 
-        <div className="rounded-lg border">
-          <div className="w-full overflow-x-auto">
-            <table className="min-w-max w-full">
-            <thead className="bg-muted/50 border-b">
-              <tr>
-                <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">User</th>
-                <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Course</th>
-                <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Result</th>
-                <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Attempts</th>
-                <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Total time</th>
-                <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Latest time</th>
-                <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Latest score</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {summaryPage.rows.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-muted-foreground">
-                    No enrollments yet.
-                  </td>
-                </tr>
-              ) : (
-                summaryPage.rows.map((r) => {
-                  const userLabel =
-                    (r.user_full_name && r.user_full_name.trim().length > 0 ? r.user_full_name.trim() : null) ??
-                    (r.user_email && r.user_email.trim().length > 0 ? r.user_email.trim() : null) ??
-                    "Unknown user";
-                  const courseLabel = (r.course_title ?? "").trim() || "Untitled course";
-                  const res = formatCourseResult(r.course_result);
-                  const attempts = `${r.submitted_count ?? 0} / ${r.attempt_count ?? 0}`;
-                  const totalTime = formatDurationSeconds(r.total_duration_seconds);
-                  const latestTime = formatDurationSeconds(r.latest_attempt_duration_seconds);
-                  const latestScore = typeof r.latest_score === "number" ? `${r.latest_score}%` : "—";
+        <RecentEnrollmentsTableV2
+          items={summaryPage.rows.map((r, idx): RecentEnrollmentItemV2 => {
+            const userLabel =
+              (r.user_full_name && r.user_full_name.trim().length > 0 ? r.user_full_name.trim() : null) ??
+              (r.user_email && r.user_email.trim().length > 0 ? r.user_email.trim() : null) ??
+              "Unknown user";
+            const courseLabel = (r.course_title ?? "").trim() || "Untitled course";
 
-                  return (
-                    <tr key={`${r.user_id}:${r.course_id}`} className="hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-3 text-sm">
-                        <div className="font-medium text-foreground">{userLabel}</div>
-                      </td>
-                      <td className="px-4 py-3 text-sm">
-                        <div className="font-medium text-foreground">{courseLabel}</div>
-                      </td>
-                      <td className="px-4 py-3 text-sm">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${res.cls}`}>
-                          {res.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right text-sm tabular-nums">{attempts}</td>
-                      <td className="px-4 py-3 text-right text-sm tabular-nums">{totalTime}</td>
-                      <td className="px-4 py-3 text-right text-sm tabular-nums">{latestTime}</td>
-                      <td className="px-4 py-3 text-right text-sm tabular-nums">{latestScore}</td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-            </table>
-          </div>
-        </div>
+            const time = r.enrolled_at ? new Date(r.enrolled_at).toLocaleString() : "—";
+            const id = `${r.organization_id}:${r.user_id}:${r.course_id}:${r.enrolled_at ?? idx}`;
+
+            return {
+              id,
+              time,
+              organization: null,
+              user: userLabel,
+              course: courseLabel,
+              result: r.course_result,
+              enrollmentStatus: r.enrollment_status,
+              testTitle: r.test_title,
+              attemptCount: r.attempt_count,
+              submittedCount: r.submitted_count,
+              totalDurationSeconds: r.total_duration_seconds,
+              latestAttemptDurationSeconds: r.latest_attempt_duration_seconds,
+              latestScore: r.latest_score,
+              enrolledAt: r.enrolled_at,
+              latestStartedAt: r.latest_started_at,
+              latestSubmittedAt: r.latest_submitted_at,
+              meta: r,
+            };
+          })}
+          emptyTitle="No enrollments yet."
+          emptySubtitle="Once users enroll and start taking tests, their progress will appear here."
+        />
 
         <div className="mt-4 flex items-center justify-between gap-3 text-sm">
           <div className="text-muted-foreground">
