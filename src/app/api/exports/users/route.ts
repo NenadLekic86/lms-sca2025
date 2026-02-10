@@ -77,6 +77,7 @@ export async function GET(request: NextRequest) {
     .from("users")
     .select("id, email, full_name, role, organization_id, is_active, created_at")
     .is("deleted_at", null)
+    .neq("role", "super_admin")
     .order("created_at", { ascending: false })
     .range(0, Math.max(0, max - 1));
 
