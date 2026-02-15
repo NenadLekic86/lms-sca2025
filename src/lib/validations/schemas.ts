@@ -127,6 +127,66 @@ export const updateCourseSchema = z.object({
   organization_ids: z.array(z.string().uuid('Invalid organization ID')).optional(),
 });
 
+export const courseDifficultySchema = z.enum(["all_levels", "beginner", "intermediate", "expert"]);
+export const courseStatusSchema = z.enum(["draft", "published"]);
+export const introVideoProviderSchema = z.enum(["html5", "youtube", "vimeo"]);
+export const courseItemTypeSchema = z.enum(["lesson", "quiz"]);
+
+export const createCourseV2Schema = z.object({
+  title: courseTitleSchema,
+});
+
+export const patchCourseV2Schema = z.object({
+  title: courseTitleSchema.optional(),
+  slug: z
+    .string()
+    .trim()
+    .min(2, "Slug must be at least 2 characters")
+    .max(120, "Slug must be at most 120 characters")
+    .regex(/^[a-z0-9-]+$/, "Slug must be lowercase alphanumeric with dashes")
+    .optional(),
+  about_html: z.string().max(120000, "About course content is too long").optional().or(z.literal("")),
+  excerpt: z.string().trim().max(200, "Excerpt must be at most 200 characters").optional().or(z.literal("")),
+  difficulty_level: courseDifficultySchema.optional(),
+  what_will_learn: z.string().max(12000, "What will I learn is too long").optional().or(z.literal("")),
+  total_duration_hours: z.number().int().min(0).max(999).optional(),
+  total_duration_minutes: z.number().int().min(0).max(59).optional(),
+  materials_included: z.string().max(12000, "Materials included is too long").optional().or(z.literal("")),
+  requirements_instructions: z.string().max(12000, "Requirements/Instructions is too long").optional().or(z.literal("")),
+  intro_video_provider: introVideoProviderSchema.nullable().optional(),
+  intro_video_url: z.string().trim().url("Invalid intro video URL").nullable().optional().or(z.literal("")),
+});
+
+export const setCourseMembersSchema = z.object({
+  member_ids: z.array(z.string().uuid("Invalid member ID")).max(500, "Too many members selected"),
+});
+
+export const createTopicSchema = z.object({
+  title: z.string().trim().min(2, "Topic name must be at least 2 characters").max(160, "Topic name is too long"),
+  summary: z.string().trim().max(2000, "Topic summary is too long").optional().or(z.literal("")),
+});
+
+export const updateTopicSchema = z.object({
+  title: z.string().trim().min(2, "Topic name must be at least 2 characters").max(160, "Topic name is too long").optional(),
+  summary: z.string().trim().max(2000, "Topic summary is too long").optional().or(z.literal("")),
+});
+
+export const reorderTopicsSchema = z.object({
+  ordered_topic_ids: z.array(z.string().uuid("Invalid topic ID")).min(1, "No topics to reorder"),
+});
+
+export const createTopicItemSchema = z.object({
+  item_type: courseItemTypeSchema,
+  title: z.string().trim().max(160, "Title is too long").optional().or(z.literal("")),
+  payload_json: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const updateTopicItemSchema = z.object({
+  title: z.string().trim().max(160, "Title is too long").optional().or(z.literal("")),
+  payload_json: z.record(z.string(), z.unknown()).optional(),
+  is_required: z.boolean().optional(),
+});
+
 // ============================================
 // API RESPONSE HELPER
 // ============================================

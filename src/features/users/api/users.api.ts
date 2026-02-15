@@ -58,6 +58,39 @@ export interface AssignOrganizationResponse {
   organization_id: string;
 }
 
+export interface AssignableCourse {
+  id: string;
+  title: string | null;
+  is_published: boolean | null;
+  is_archived: boolean | null;
+  created_at: string | null;
+}
+
+export interface GetAssignableCoursesResponse {
+  courses: AssignableCourse[];
+}
+
+export interface GetUserCourseAssignmentsResponse {
+  user_id: string;
+  course_ids: string[];
+}
+
+export interface ReplaceUserCourseAssignmentsResponse {
+  user_id: string;
+  course_ids: string[];
+  added_count: number;
+  removed_count: number;
+}
+
+export interface BulkCourseAssignmentsResponse {
+  action: "assign" | "remove";
+  course_id: string;
+  requested_count: number;
+  success_count: number;
+  failure_count: number;
+  failures: Array<{ user_id: string; reason: string }>;
+}
+
 /**
  * Users API client - calls server-side API routes
  * Server routes handle RPC calls and auth admin operations
@@ -165,6 +198,50 @@ export const usersApi = {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ organization_id: organizationId }),
+    });
+    return { ...data, message };
+  },
+
+  /**
+   * Get assignable courses for the current org-admin organization.
+   */
+  async getAssignableCourses(): Promise<GetAssignableCoursesResponse> {
+    const { data } = await fetchJson<GetAssignableCoursesResponse>("/api/org/courses/assignable", { cache: "no-store" });
+    return data;
+  },
+
+  /**
+   * Get one member's course assignment IDs.
+   */
+  async getUserCourseAssignments(userId: string): Promise<GetUserCourseAssignmentsResponse> {
+    const { data } = await fetchJson<GetUserCourseAssignmentsResponse>(`/api/users/${userId}/course-assignments`, { cache: "no-store" });
+    return data;
+  },
+
+  /**
+   * Replace one member's assignments with the given course IDs.
+   */
+  async replaceUserCourseAssignments(userId: string, courseIds: string[]): Promise<ApiResult<ReplaceUserCourseAssignmentsResponse>> {
+    const { data, message } = await fetchJson<ReplaceUserCourseAssignmentsResponse>(`/api/users/${userId}/course-assignments`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ course_ids: courseIds }),
+    });
+    return { ...data, message };
+  },
+
+  /**
+   * Bulk assign/remove one course for many users.
+   */
+  async bulkCourseAssignments(input: {
+    user_ids: string[];
+    course_id: string;
+    action: "assign" | "remove";
+  }): Promise<ApiResult<BulkCourseAssignmentsResponse>> {
+    const { data, message } = await fetchJson<BulkCourseAssignmentsResponse>("/api/course-assignments/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
     });
     return { ...data, message };
   },

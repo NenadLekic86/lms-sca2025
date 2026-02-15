@@ -1,0 +1,140 @@
+import { notFound, redirect } from "next/navigation";
+import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
+import { CourseEditorV2Form } from "@/features/courses/components/CourseEditorV2Form";
+import type { CourseTopic, CourseV2, MemberOption } from "@/features/courses/components/CourseEditorV2Form";
+
+export const fetchCache = "force-no-store";
+
+type TopicRow = {
+  id: string;
+  title: string;
+  summary: string | null;
+  position: number;
+};
+
+type ItemRow = {
+  id: string;
+  topic_id: string;
+  item_type: "lesson" | "quiz";
+  title: string | null;
+  position: number;
+  payload_json: Record<string, unknown>;
+};
+
+export default async function OrgCourseEditV2Page({
+  params,
+}: {
+  params: Promise<{ orgId: string; courseId: string }>;
+}) {
+  const { user, error } = await getServerUser();
+  if (error || !user) redirect("/");
+
+  const { orgId: orgKey, courseId } = await params;
+  const resolved = await resolveOrgKey(orgKey);
+  const org = resolved.org;
+  if (!org) {
+    if (user.role === "organization_admin" || user.role === "member") redirect("/unauthorized");
+    notFound();
+  }
+
+  const orgId = org.id;
+  const orgSlug = org.slug;
+  if (user.role !== "organization_admin") redirect("/unauthorized");
+  if (!user.organization_id || user.organization_id !== orgId) redirect("/unauthorized");
+
+  const supabase = await createServerSupabaseClient();
+  const admin = createAdminSupabaseClient();
+
+  const [{ data: courseRow, error: courseError }, { data: topicsData }, { data: itemsData }, { data: membersData }, { data: assignedData }] =
+    await Promise.all([
+      supabase
+        .from("courses")
+        .select(
+          "id, organization_id, title, slug, status, about_html, excerpt, difficulty_level, what_will_learn, total_duration_hours, total_duration_minutes, materials_included, requirements_instructions, intro_video_provider, intro_video_url, intro_video_storage_path, cover_image_url"
+        )
+        .eq("id", courseId)
+        .single(),
+      supabase.from("course_topics").select("id, title, summary, position").eq("course_id", courseId).order("position", { ascending: true }),
+      supabase
+        .from("course_topic_items")
+        .select("id, topic_id, item_type, title, position, payload_json")
+        .eq("course_id", courseId)
+        .order("position", { ascending: true }),
+      admin
+        .from("users")
+        .select("id, full_name, email")
+        .eq("organization_id", orgId)
+        .eq("role", "member")
+        .neq("is_active", false)
+        .order("full_name", { ascending: true }),
+      supabase.from("course_member_assignments").select("user_id").eq("course_id", courseId).eq("organization_id", orgId),
+    ]);
+
+  if (courseError || !courseRow) redirect(`/org/${orgSlug}/courses`);
+  if ((courseRow.organization_id ?? null) !== orgId) redirect("/unauthorized");
+
+  const memberOptions: MemberOption[] = (Array.isArray(membersData) ? membersData : [])
+    .map((m) => {
+      const fullName = typeof (m as { full_name?: unknown }).full_name === "string" && (m as { full_name: string }).full_name.trim().length > 0 ? (m as { full_name: string }).full_name.trim() : null;
+      const email = typeof (m as { email?: unknown }).email === "string" && (m as { email: string }).email.trim().length > 0 ? (m as { email: string }).email.trim() : null;
+      const id = String((m as { id: string }).id);
+      return {
+        id,
+        label: fullName ?? email ?? id,
+      };
+    })
+    .filter((m): m is { id: string; label: string } => typeof m.id === "string" && typeof m.label === "string");
+
+  const itemMap = new Map<string, ItemRow[]>();
+  for (const item of (Array.isArray(itemsData) ? itemsData : []) as ItemRow[]) {
+    const arr = itemMap.get(item.topic_id) ?? [];
+    arr.push(item);
+    itemMap.set(item.topic_id, arr);
+  }
+
+  const topics: CourseTopic[] = ((Array.isArray(topicsData) ? topicsData : []) as TopicRow[]).map((t) => ({
+    id: t.id,
+    title: t.title,
+    summary: t.summary,
+    position: t.position,
+    items: (itemMap.get(t.id) ?? []).sort((a, b) => a.position - b.position),
+  }));
+
+  const assignedMemberIds = (Array.isArray(assignedData) ? assignedData : [])
+    .map((r) => r.user_id)
+    .filter((v): v is string => typeof v === "string");
+
+  const initialCourse: CourseV2 = {
+    id: String(courseRow.id),
+    title: (courseRow as { title?: string | null }).title ?? null,
+    slug: (courseRow as { slug?: string | null }).slug ?? null,
+    status: ((courseRow as { status?: "draft" | "published" | null }).status ?? "draft") as "draft" | "published",
+    about_html: (courseRow as { about_html?: string | null }).about_html ?? null,
+    excerpt: (courseRow as { excerpt?: string | null }).excerpt ?? null,
+    difficulty_level:
+      ((courseRow as { difficulty_level?: CourseV2["difficulty_level"] }).difficulty_level ?? "all_levels") as CourseV2["difficulty_level"],
+    what_will_learn: (courseRow as { what_will_learn?: string | null }).what_will_learn ?? null,
+    total_duration_hours: (courseRow as { total_duration_hours?: number | null }).total_duration_hours ?? 0,
+    total_duration_minutes: (courseRow as { total_duration_minutes?: number | null }).total_duration_minutes ?? 0,
+    materials_included: (courseRow as { materials_included?: string | null }).materials_included ?? null,
+    requirements_instructions: (courseRow as { requirements_instructions?: string | null }).requirements_instructions ?? null,
+    intro_video_provider: (courseRow as { intro_video_provider?: CourseV2["intro_video_provider"] }).intro_video_provider ?? null,
+    intro_video_url: (courseRow as { intro_video_url?: string | null }).intro_video_url ?? null,
+    intro_video_storage_path: (courseRow as { intro_video_storage_path?: string | null }).intro_video_storage_path ?? null,
+    cover_image_url: (courseRow as { cover_image_url?: string | null }).cover_image_url ?? null,
+    assigned_member_ids: assignedMemberIds,
+  };
+
+  return (
+    <CourseEditorV2Form
+      mode="edit"
+      orgSlug={orgSlug}
+      backHref={`/org/${orgSlug}/courses`}
+      initialCourse={initialCourse}
+      initialTopics={topics}
+      memberOptions={memberOptions}
+    />
+  );
+}
+

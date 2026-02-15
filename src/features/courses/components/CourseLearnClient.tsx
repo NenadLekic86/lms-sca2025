@@ -44,13 +44,17 @@ function formatBytes(n: number) {
 export function CourseLearnClient({
   orgId,
   courseId,
+  courseHrefKey,
   courseTitle,
   resources,
   videos,
   initialProgress,
 }: {
   orgId: string;
+  // UUID used for API calls / DB
   courseId: string;
+  // Slug (preferred) or UUID used in URLs
+  courseHrefKey: string;
   courseTitle: string;
   resources: ResourceRow[];
   videos: VideoRow[];
@@ -159,7 +163,7 @@ export function CourseLearnClient({
             <div className="text-xl font-semibold text-foreground">{courseTitle}</div>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => router.push(`/org/${orgId}/courses/${courseId}`)}>
+            <Button variant="outline" onClick={() => router.push(`/org/${orgId}/courses/${courseHrefKey}`)}>
               Back to course
             </Button>
             <Button onClick={() => void beginTest()} disabled={!canBeginTest}>

@@ -8,6 +8,7 @@ import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 
 type CourseRow = {
   id: string;
+  slug?: string | null;
   title?: string | null;
   description?: string | null;
   excerpt?: string | null;
@@ -76,7 +77,7 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
   // Org-only courses: list only org-owned courses on org pages.
   const coursesQuery = supabase
     .from("courses")
-    .select("id, title, description, excerpt, cover_image_url, created_at, is_published, visibility_scope, organization_id")
+    .select("id, slug, title, description, excerpt, cover_image_url, created_at, is_published, visibility_scope, organization_id")
     .order("created_at", { ascending: false })
     .limit(200);
 
@@ -97,7 +98,7 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
 
         {user.role === "organization_admin" && user.organization_id === orgId ? (
           <Button asChild className="shrink-0">
-            <Link href={`/org/${orgSlug}/courses/new`}>
+            <Link href={`/org/${orgSlug}/courses/new-v2`}>
               <Plus className="h-4 w-4" />
               Create course
             </Link>
@@ -182,11 +183,11 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
                     <div className="flex items-center gap-2">
                       {canEdit ? (
                         <Button size="sm" variant="secondary" asChild>
-                          <Link href={`/org/${orgSlug}/courses/${course.id}/edit`}>Edit</Link>
+                          <Link href={`/org/${orgSlug}/courses/${course.id}/edit-v2`}>Edit</Link>
                         </Button>
                       ) : null}
                       <Button size="sm" variant="outline" asChild>
-                        <Link href={`/org/${orgSlug}/courses/${course.id}`}>View</Link>
+                        <Link href={`/org/${orgSlug}/courses/${(course.slug ?? "").trim() || course.id}`}>View</Link>
                       </Button>
                     </div>
                   </div>

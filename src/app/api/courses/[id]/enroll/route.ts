@@ -63,6 +63,38 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
+  // Members must be explicitly assigned to the course by org admin.
+  const { data: assignment, error: assignmentError } = await admin
+    .from("course_member_assignments")
+    .select("id")
+    .eq("organization_id", orgId)
+    .eq("course_id", id)
+    .eq("user_id", caller.id)
+    .maybeSingle();
+  if (assignmentError) {
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to validate course access.",
+      internalMessage: assignmentError.message,
+    });
+    return apiError("INTERNAL", "Failed to validate course access.", { status: 500 });
+  }
+  if (!assignment?.id) {
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 403,
+      code: "FORBIDDEN",
+      publicMessage: "You are not assigned to this course.",
+    });
+    return apiError("FORBIDDEN", "You are not assigned to this course.", { status: 403 });
+  }
+
   // Already enrolled? (idempotent)
   const { data: existing } = await session
     .from("course_enrollments")

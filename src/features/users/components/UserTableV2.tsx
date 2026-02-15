@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 
 import type { Role } from "@/types";
-import type { ApiUser } from "../api/users.api";
+import type { ApiUser, AssignableCourse } from "../api/users.api";
 import type { Organization } from "@/features/organizations";
 
 import { useUsers } from "../hooks/useUsers";
@@ -256,6 +256,14 @@ function resolveOrgLabel(org: Organization): { label: string; inactive: boolean 
   return { label, inactive };
 }
 
+function areStringSetsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const v of a) {
+    if (!b.has(v)) return false;
+  }
+  return true;
+}
+
 export function UserTableV2({
   title = "All Users",
   organizationId,
@@ -284,6 +292,10 @@ export function UserTableV2({
     assignOrganization,
     bulkAssignOrganization,
     sendPasswordSetupLink,
+    getAssignableCourses,
+    getUserCourseAssignments,
+    replaceUserCourseAssignments,
+    bulkCourseAssignments,
   } = useUsers(orgScopedId ?? undefined);
 
   const isOrgAdmin = callerRole === ("organization_admin" as Role);
@@ -351,10 +363,41 @@ export function UserTableV2({
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [isBulkApplying, setIsBulkApplying] = useState(false);
   const [bulkTargetRole, setBulkTargetRole] = useState<Role | "">("");
+  const [bulkCourseId, setBulkCourseId] = useState<string>("");
+  const [assignableCourses, setAssignableCourses] = useState<AssignableCourse[]>([]);
+  const [isAssignableCoursesLoading, setIsAssignableCoursesLoading] = useState(false);
 
   useEffect(() => {
     if (!bulkMode) setBulkTargetRole("");
   }, [bulkMode]);
+
+  useEffect(() => {
+    if (!isOrgAdmin) {
+      setAssignableCourses([]);
+      setBulkCourseId("");
+      return;
+    }
+
+    let cancelled = false;
+    const loadAssignableCourses = async () => {
+      setIsAssignableCoursesLoading(true);
+      try {
+        const data = await getAssignableCourses();
+        if (cancelled) return;
+        const list = Array.isArray(data.courses) ? data.courses : [];
+        setAssignableCourses(list);
+      } catch (e) {
+        if (cancelled) return;
+        toast.error(e instanceof Error ? e.message : "Failed to load assignable courses");
+      } finally {
+        if (!cancelled) setIsAssignableCoursesLoading(false);
+      }
+    };
+    void loadAssignableCourses();
+    return () => {
+      cancelled = true;
+    };
+  }, [getAssignableCourses, isOrgAdmin]);
 
   const orgOptions = useMemo(() => {
     const opts = (organizations ?? []).map((o) => {
@@ -622,6 +665,22 @@ export function UserTableV2({
       })()
     : bulkTargetOrgId || "—";
 
+  const loadUserCourseAssignments = useCallback(
+    async (userId: string) => {
+      const res = await getUserCourseAssignments(userId);
+      return { courseIds: Array.isArray(res.course_ids) ? res.course_ids : [] };
+    },
+    [getUserCourseAssignments]
+  );
+
+  const saveUserCourseAssignments = useCallback(
+    async (userId: string, courseIds: string[]) => {
+      const res = await replaceUserCourseAssignments(userId, courseIds);
+      return { message: res.message };
+    },
+    [replaceUserCourseAssignments]
+  );
+
   const handleInviteUser = async (data: UserFormData) => {
     const t = toast.loading("Inviting user…");
     try {
@@ -638,6 +697,47 @@ export function UserTableV2({
       setIsInviteOpen(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to invite user", { id: t });
+    }
+  };
+
+  const handleBulkCourseAction = async (action: "assign" | "remove") => {
+    if (!bulkCourseId) return;
+    if (selectedUserIds.size === 0) return;
+    const ids = Array.from(selectedUserIds);
+    const confirmMsg =
+      action === "assign"
+        ? `Assign selected course to ${ids.length} user${ids.length === 1 ? "" : "s"}?`
+        : `Remove selected course from ${ids.length} user${ids.length === 1 ? "" : "s"}?`;
+    if (!confirm(confirmMsg)) return;
+
+    setIsBulkApplying(true);
+    const t = toast.loading(action === "assign" ? "Assigning course…" : "Removing course assignment…");
+    try {
+      const res = await bulkCourseAssignments({
+        user_ids: ids,
+        course_id: bulkCourseId,
+        action,
+      });
+
+      const successCount = res.success_count ?? 0;
+      const failureCount = res.failure_count ?? 0;
+      const failures = Array.isArray(res.failures) ? res.failures : [];
+
+      if (failureCount === 0) {
+        toast.success(res.message || `${action === "assign" ? "Assigned" : "Removed"} for ${successCount} user${successCount === 1 ? "" : "s"}.`, { id: t });
+        setSelectedUserIds(new Set());
+        return;
+      }
+
+      toast.error(
+        `${action === "assign" ? "Assigned" : "Removed"} for ${successCount} user${successCount === 1 ? "" : "s"}. ${failureCount} failed.`,
+        { id: t }
+      );
+      setSelectedUserIds(new Set(failures.map((f) => f.user_id)));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Bulk course action failed", { id: t });
+    } finally {
+      setIsBulkApplying(false);
     }
   };
 
@@ -843,6 +943,7 @@ export function UserTableV2({
                     setSelectedUserIds(new Set());
                     setBulkTargetOrgId("");
                     setBulkTargetRole("");
+                    setBulkCourseId("");
                   }}
                   disabled={isBulkApplying}
                   className="h-9 hover:bg-primary hover:text-white hover:border-primary"
@@ -854,64 +955,98 @@ export function UserTableV2({
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {isOrgAdmin ? (
                   <>
-                    <FilterSelect
-                      ariaLabel="Bulk role"
-                      value={(bulkTargetRole || "") as string}
-                      onChange={(v) => setBulkTargetRole(v as Role | "")}
-                      disabled={isBulkApplying}
-                      className="w-full"
-                      options={[
-                        { value: "", label: "Set role…" },
-                        { value: "organization_admin", label: roleLabel("organization_admin") },
-                        { value: "member", label: roleLabel("member") },
-                      ]}
-                    />
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <FilterSelect
+                        ariaLabel="Bulk role"
+                        value={(bulkTargetRole || "") as string}
+                        onChange={(v) => setBulkTargetRole(v as Role | "")}
+                        disabled={isBulkApplying}
+                        className="w-full"
+                        options={[
+                          { value: "", label: "Set role…" },
+                          { value: "organization_admin", label: roleLabel("organization_admin") },
+                          { value: "member", label: roleLabel("member") },
+                        ]}
+                      />
+                      <Button
+                        className="w-full"
+                        disabled={!bulkTargetRole || isBulkApplying}
+                        onClick={async () => {
+                          if (!bulkTargetRole) return;
+                          if (selectedUserIds.size === 0) return;
+                          const ok = confirm(
+                            `Change role for ${selectedUserIds.size} user${selectedUserIds.size === 1 ? "" : "s"} to "${roleLabel(
+                              bulkTargetRole as Role
+                            )}"?`
+                          );
+                          if (!ok) return;
 
-                    <Button
-                      className="w-full"
-                      disabled={!bulkTargetRole || isBulkApplying}
-                      onClick={async () => {
-                        if (!bulkTargetRole) return;
-                        if (selectedUserIds.size === 0) return;
-                        const ok = confirm(
-                          `Change role for ${selectedUserIds.size} user${selectedUserIds.size === 1 ? "" : "s"} to "${roleLabel(
-                            bulkTargetRole as Role
-                          )}"?`
-                        );
-                        if (!ok) return;
-
-                        setIsBulkApplying(true);
-                        const t = toast.loading("Updating roles…");
-                        const failures: string[] = [];
-                        try {
-                          const ids = Array.from(selectedUserIds);
-                          for (const id of ids) {
-                            try {
-                              await changeUserRole(id, bulkTargetRole as Role);
-                            } catch {
-                              failures.push(id);
+                          setIsBulkApplying(true);
+                          const t = toast.loading("Updating roles…");
+                          const failures: string[] = [];
+                          try {
+                            const ids = Array.from(selectedUserIds);
+                            for (const id of ids) {
+                              try {
+                                await changeUserRole(id, bulkTargetRole as Role);
+                              } catch {
+                                failures.push(id);
+                              }
                             }
-                          }
 
-                          if (failures.length === 0) {
-                            toast.success(`Updated role for ${ids.length} user${ids.length === 1 ? "" : "s"}.`, { id: t });
-                            setSelectedUserIds(new Set());
-                            setBulkTargetRole("");
-                          } else {
-                            const successCount = ids.length - failures.length;
-                            toast.error(
-                              `Updated ${successCount} user${successCount === 1 ? "" : "s"}. ${failures.length} failed.`,
-                              { id: t }
-                            );
-                            setSelectedUserIds(new Set(failures));
+                            if (failures.length === 0) {
+                              toast.success(`Updated role for ${ids.length} user${ids.length === 1 ? "" : "s"}.`, { id: t });
+                              setSelectedUserIds(new Set());
+                              setBulkTargetRole("");
+                            } else {
+                              const successCount = ids.length - failures.length;
+                              toast.error(
+                                `Updated ${successCount} user${successCount === 1 ? "" : "s"}. ${failures.length} failed.`,
+                                { id: t }
+                              );
+                              setSelectedUserIds(new Set(failures));
+                            }
+                          } finally {
+                            setIsBulkApplying(false);
                           }
-                        } finally {
-                          setIsBulkApplying(false);
-                        }
-                      }}
-                    >
-                      Update roles
-                    </Button>
+                        }}
+                      >
+                        Update roles
+                      </Button>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:col-span-2">
+                      <FilterSelect
+                        ariaLabel="Bulk course assignment"
+                        value={(bulkCourseId || "") as string}
+                        onChange={(v) => setBulkCourseId(v)}
+                        disabled={isBulkApplying || isAssignableCoursesLoading}
+                        className="w-full sm:col-span-1"
+                        options={[
+                          { value: "", label: isAssignableCoursesLoading ? "Loading courses…" : "Select course…" },
+                          ...assignableCourses.map((c) => ({
+                            value: c.id,
+                            label: `${(c.title ?? "").trim() || "(untitled)"}${c.is_published ? "" : " (draft)"}`,
+                          })),
+                        ]}
+                      />
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        disabled={!bulkCourseId || isBulkApplying}
+                        onClick={() => void handleBulkCourseAction("assign")}
+                      >
+                        Assign selected
+                      </Button>
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        disabled={!bulkCourseId || isBulkApplying}
+                        onClick={() => void handleBulkCourseAction("remove")}
+                      >
+                        Remove selected
+                      </Button>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -987,6 +1122,7 @@ export function UserTableV2({
                     setSelectedUserIds(new Set());
                     setBulkTargetOrgId("");
                     setBulkTargetRole("");
+                    setBulkCourseId("");
                   }}
                   disabled={isBulkApplying}
                   className="hover:bg-primary hover:text-white hover:border-primary"
@@ -995,50 +1131,81 @@ export function UserTableV2({
                 </Button>
 
                 {isOrgAdmin ? (
-                  <Button
-                    disabled={!bulkTargetRole || isBulkApplying}
-                    onClick={async () => {
-                      if (!bulkTargetRole) return;
-                      if (selectedUserIds.size === 0) return;
-                      const ok = confirm(
-                        `Change role for ${selectedUserIds.size} user${selectedUserIds.size === 1 ? "" : "s"} to "${roleLabel(
-                          bulkTargetRole as Role
-                        )}"?`
-                      );
-                      if (!ok) return;
+                  <>
+                    <Button
+                      disabled={!bulkTargetRole || isBulkApplying}
+                      onClick={async () => {
+                        if (!bulkTargetRole) return;
+                        if (selectedUserIds.size === 0) return;
+                        const ok = confirm(
+                          `Change role for ${selectedUserIds.size} user${selectedUserIds.size === 1 ? "" : "s"} to "${roleLabel(
+                            bulkTargetRole as Role
+                          )}"?`
+                        );
+                        if (!ok) return;
 
-                      setIsBulkApplying(true);
-                      const t = toast.loading("Updating roles…");
-                      const failures: string[] = [];
-                      try {
-                        const ids = Array.from(selectedUserIds);
-                        for (const id of ids) {
-                          try {
-                            await changeUserRole(id, bulkTargetRole as Role);
-                          } catch {
-                            failures.push(id);
+                        setIsBulkApplying(true);
+                        const t = toast.loading("Updating roles…");
+                        const failures: string[] = [];
+                        try {
+                          const ids = Array.from(selectedUserIds);
+                          for (const id of ids) {
+                            try {
+                              await changeUserRole(id, bulkTargetRole as Role);
+                            } catch {
+                              failures.push(id);
+                            }
                           }
-                        }
 
-                        if (failures.length === 0) {
-                          toast.success(`Updated role for ${ids.length} user${ids.length === 1 ? "" : "s"}.`, { id: t });
-                          setSelectedUserIds(new Set());
-                          setBulkTargetRole("");
-                        } else {
-                          const successCount = ids.length - failures.length;
-                          toast.error(
-                            `Updated ${successCount} user${successCount === 1 ? "" : "s"}. ${failures.length} failed.`,
-                            { id: t }
-                          );
-                          setSelectedUserIds(new Set(failures));
+                          if (failures.length === 0) {
+                            toast.success(`Updated role for ${ids.length} user${ids.length === 1 ? "" : "s"}.`, { id: t });
+                            setSelectedUserIds(new Set());
+                            setBulkTargetRole("");
+                          } else {
+                            const successCount = ids.length - failures.length;
+                            toast.error(
+                              `Updated ${successCount} user${successCount === 1 ? "" : "s"}. ${failures.length} failed.`,
+                              { id: t }
+                            );
+                            setSelectedUserIds(new Set(failures));
+                          }
+                        } finally {
+                          setIsBulkApplying(false);
                         }
-                      } finally {
-                        setIsBulkApplying(false);
-                      }
-                    }}
-                  >
-                    Update roles
-                  </Button>
+                      }}
+                    >
+                      Update roles
+                    </Button>
+
+                    <FilterSelect
+                      ariaLabel="Bulk course assignment"
+                      value={(bulkCourseId || "") as string}
+                      onChange={(v) => setBulkCourseId(v)}
+                      disabled={isBulkApplying || isAssignableCoursesLoading}
+                      className="min-w-[260px]"
+                      options={[
+                        { value: "", label: isAssignableCoursesLoading ? "Loading courses…" : "Select course…" },
+                        ...assignableCourses.map((c) => ({
+                          value: c.id,
+                          label: `${(c.title ?? "").trim() || "(untitled)"}${c.is_published ? "" : " (draft)"}`,
+                        })),
+                      ]}
+                    />
+                    <Button
+                      variant="outline"
+                      disabled={!bulkCourseId || isBulkApplying}
+                      onClick={() => void handleBulkCourseAction("assign")}
+                    >
+                      Assign selected
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={!bulkCourseId || isBulkApplying}
+                      onClick={() => void handleBulkCourseAction("remove")}
+                    >
+                      Remove selected
+                    </Button>
+                  </>
                 ) : (
                   <Button
                     disabled={!bulkTargetOrgId || isBulkApplying}
@@ -1340,6 +1507,10 @@ export function UserTableV2({
                 const res = await sendPasswordSetupLink(userId);
                 return { message: res.message };
               }}
+              assignableCourses={assignableCourses}
+              assignableCoursesLoading={isAssignableCoursesLoading}
+              onLoadCourseAssignments={loadUserCourseAssignments}
+              onSaveCourseAssignments={saveUserCourseAssignments}
             />
           ))
         )}
@@ -1383,6 +1554,10 @@ export function UserTableV2({
             const res = await sendPasswordSetupLink(userId);
             return { message: res.message };
           }}
+          assignableCourses={assignableCourses}
+          assignableCoursesLoading={isAssignableCoursesLoading}
+          onLoadCourseAssignments={loadUserCourseAssignments}
+          onSaveCourseAssignments={saveUserCourseAssignments}
         />
       ) : null}
 
@@ -1466,23 +1641,46 @@ function UserDetailsDrawer(props: {
   onDelete: (userId: string) => Promise<{ message?: string }>;
   onResendInvite: (userId: string) => Promise<{ message?: string }>;
   onPasswordSetupLink: (userId: string) => Promise<{ message?: string }>;
+  assignableCourses: AssignableCourse[];
+  assignableCoursesLoading: boolean;
+  onLoadCourseAssignments: (userId: string) => Promise<{ courseIds: string[] }>;
+  onSaveCourseAssignments: (userId: string, courseIds: string[]) => Promise<{ message?: string }>;
 }) {
-  const { user, callerRole, organizations, onClose, open } = props;
+  const {
+    user,
+    callerRole,
+    organizations,
+    onClose,
+    open,
+    assignableCourses,
+    assignableCoursesLoading,
+    onLoadCourseAssignments,
+    onSaveCourseAssignments,
+  } = props;
   const [selectedRole, setSelectedRole] = useState<Role>(user.role);
   const [selectedOrgId, setSelectedOrgId] = useState<string>(user.organization_id ?? "");
   const [isSavingRole, setIsSavingRole] = useState(false);
   const [isSavingOrg, setIsSavingOrg] = useState(false);
+  const [isLoadingCourses, setIsLoadingCourses] = useState(false);
+  const [isSavingCourses, setIsSavingCourses] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [entered, setEntered] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
+  const [baselineCourseIds, setBaselineCourseIds] = useState<Set<string>>(new Set());
+  const [selectedCourseIds, setSelectedCourseIds] = useState<Set<string>>(new Set());
 
   useEffect(() => setSelectedRole(user.role), [user.role]);
   useEffect(() => setSelectedOrgId(user.organization_id ?? ""), [user.organization_id]);
+  useEffect(() => {
+    setBaselineCourseIds(new Set());
+    setSelectedCourseIds(new Set());
+  }, [user.id]);
 
   const canEdit = canEditRole(callerRole, user.role);
   const canOrg = canAssignOrg(callerRole, user.role);
   const canSetup = canSendSetupLink(callerRole, user.role);
   const canDelete = canDeleteUser(callerRole, user.role);
+  const canManageCourseAccess = callerRole === "organization_admin" && user.role === "member";
 
   const isEnabled = user.is_active !== false;
   const isPending = isEnabled && user.onboarding_status === "pending";
@@ -1500,6 +1698,34 @@ function UserDetailsDrawer(props: {
   useEffect(() => setAvatarError(false), [user.id, avatarUrl]);
 
   useEffect(() => {
+    if (!canManageCourseAccess || !open) {
+      setBaselineCourseIds(new Set());
+      setSelectedCourseIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    const loadAssignments = async () => {
+      setIsLoadingCourses(true);
+      try {
+        const res = await onLoadCourseAssignments(user.id);
+        if (cancelled) return;
+        const ids = new Set(Array.isArray(res.courseIds) ? res.courseIds : []);
+        setBaselineCourseIds(ids);
+        setSelectedCourseIds(new Set(ids));
+      } catch (e) {
+        if (cancelled) return;
+        toast.error(e instanceof Error ? e.message : "Failed to load course assignments");
+      } finally {
+        if (!cancelled) setIsLoadingCourses(false);
+      }
+    };
+    void loadAssignments();
+    return () => {
+      cancelled = true;
+    };
+  }, [canManageCourseAccess, onLoadCourseAssignments, open, user.id]);
+
+  useEffect(() => {
     const t = window.setTimeout(() => setEntered(true), 0);
     return () => window.clearTimeout(t);
   }, []);
@@ -1509,6 +1735,7 @@ function UserDetailsDrawer(props: {
   const statusText = !isEnabled ? "Disabled" : isPending ? "Pending" : "Active";
   const statusTone = !isEnabled ? "text-gray-700" : isPending ? "text-amber-800" : "text-emerald-700";
   const orgCreated = org?.created_at ?? null;
+  const courseAssignmentsDirty = !areStringSetsEqual(selectedCourseIds, baselineCourseIds);
 
   return (
     <div
@@ -1756,15 +1983,95 @@ function UserDetailsDrawer(props: {
                   ) : null}
                 </div>
 
+                {canManageCourseAccess ? (
+                  <div>
+                    <label className="block text-xs font-medium text-muted-foreground mb-1">Course access</label>
+                    {assignableCoursesLoading || isLoadingCourses ? (
+                      <div className="text-sm text-muted-foreground">Loading course access…</div>
+                    ) : assignableCourses.length === 0 ? (
+                      <div className="text-sm text-muted-foreground">No courses available in this organization.</div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="max-h-52 overflow-auto rounded-md border p-2">
+                          <div className="space-y-1">
+                            {assignableCourses.map((course) => {
+                              const cid = course.id;
+                              const checked = selectedCourseIds.has(cid);
+                              const title = (course.title ?? "").trim() || "(untitled)";
+                              return (
+                                <label key={cid} className="flex items-center gap-2 rounded-sm px-2 py-1 text-sm hover:bg-muted/40">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 accent-primary"
+                                    checked={checked}
+                                    onChange={(e) => {
+                                      const nextChecked = e.target.checked;
+                                      setSelectedCourseIds((prev) => {
+                                        const next = new Set(prev);
+                                        if (nextChecked) next.add(cid);
+                                        else next.delete(cid);
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                  <span className="truncate">{title}</span>
+                                  {course.is_published ? null : (
+                                    <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
+                                      Draft
+                                    </span>
+                                  )}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            disabled={isSavingCourses || !courseAssignmentsDirty}
+                            onClick={async () => {
+                              setIsSavingCourses(true);
+                              const t = toast.loading("Saving course access…");
+                              try {
+                                const nextIds = Array.from(selectedCourseIds);
+                                const res = await onSaveCourseAssignments(user.id, nextIds);
+                                setBaselineCourseIds(new Set(nextIds));
+                                toast.success(res.message || "Course access updated.", { id: t });
+                              } catch (e) {
+                                toast.error(e instanceof Error ? e.message : "Failed to save course access", { id: t });
+                              } finally {
+                                setIsSavingCourses(false);
+                              }
+                            }}
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            disabled={isSavingCourses || !courseAssignmentsDirty}
+                            onClick={() => setSelectedCourseIds(new Set(baselineCourseIds))}
+                          >
+                            Reset
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    <HelpText>
+                      Select exactly which courses this member can see and start.
+                    </HelpText>
+                  </div>
+                ) : null}
+
                 <div className="flex w-full">
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    disabled={isSavingRole || isSavingOrg}
+                    disabled={isSavingRole || isSavingOrg || isSavingCourses}
                     onClick={() => {
                       setSelectedRole(user.role);
                       setSelectedOrgId(user.organization_id ?? "");
+                      setSelectedCourseIds(new Set(baselineCourseIds));
                     }}
                     className="w-full min-h-[40px] border border-primary bg-primary text-white hover:bg-white hover:text-foreground hover:border-primary"
                   >
@@ -1772,7 +2079,7 @@ function UserDetailsDrawer(props: {
                 </Button>
               </div>
               <HelpText className="text-right">
-                Resets Role and Organization to their original values (does not save).
+                Resets unsaved Access & assignment changes (does not save).
               </HelpText>
               </div>
             </div>
@@ -2095,17 +2402,37 @@ function MobileUserCard(props: {
   onDelete: (userId: string) => Promise<{ message?: string }>;
   onResendInvite: (userId: string) => Promise<{ message?: string }>;
   onPasswordSetupLink: (userId: string) => Promise<{ message?: string }>;
+  assignableCourses: AssignableCourse[];
+  assignableCoursesLoading: boolean;
+  onLoadCourseAssignments: (userId: string) => Promise<{ courseIds: string[] }>;
+  onSaveCourseAssignments: (userId: string, courseIds: string[]) => Promise<{ message?: string }>;
 }) {
-  const { user, callerRole, organizations } = props;
+  const {
+    user,
+    callerRole,
+    organizations,
+    assignableCourses,
+    assignableCoursesLoading,
+    onLoadCourseAssignments,
+    onSaveCourseAssignments,
+  } = props;
   const [avatarError, setAvatarError] = useState(false);
   const [selectedRole, setSelectedRole] = useState<Role>(user.role);
   const [selectedOrgId, setSelectedOrgId] = useState<string>(user.organization_id ?? "");
+  const [baselineCourseIds, setBaselineCourseIds] = useState<Set<string>>(new Set());
+  const [selectedCourseIds, setSelectedCourseIds] = useState<Set<string>>(new Set());
+  const [loadingCourses, setLoadingCourses] = useState(false);
+  const [savingCourses, setSavingCourses] = useState(false);
   const [busy, setBusy] = useState(false);
   const [savingRole, setSavingRole] = useState(false);
   const [savingOrg, setSavingOrg] = useState(false);
 
   useEffect(() => setSelectedRole(user.role), [user.role]);
   useEffect(() => setSelectedOrgId(user.organization_id ?? ""), [user.organization_id]);
+  useEffect(() => {
+    setBaselineCourseIds(new Set());
+    setSelectedCourseIds(new Set());
+  }, [user.id]);
 
   const isEnabled = user.is_active !== false;
   const isPending = isEnabled && user.onboarding_status === "pending";
@@ -2114,6 +2441,7 @@ function MobileUserCard(props: {
   const canEdit = canEditRole(callerRole, user.role);
   const canOrg = canAssignOrg(callerRole, user.role);
   const canDelete = canDeleteUser(callerRole, user.role);
+  const canManageCourseAccess = callerRole === "organization_admin" && user.role === "member";
 
   const org = user.organization_id ? organizations.find((o) => o.id === user.organization_id) ?? null : null;
   const orgInfo =
@@ -2134,6 +2462,35 @@ function MobileUserCard(props: {
   const statusTone = !isEnabled ? "text-gray-100" : isPending ? "text-amber-200" : "text-emerald-200";
   const StatusIcon = !isEnabled ? X : isPending ? Send : CheckCheck;
   const open = props.open;
+  const courseAssignmentsDirty = !areStringSetsEqual(selectedCourseIds, baselineCourseIds);
+
+  useEffect(() => {
+    if (!canManageCourseAccess || !open) {
+      setBaselineCourseIds(new Set());
+      setSelectedCourseIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    const loadAssignments = async () => {
+      setLoadingCourses(true);
+      try {
+        const res = await onLoadCourseAssignments(user.id);
+        if (cancelled) return;
+        const ids = new Set(Array.isArray(res.courseIds) ? res.courseIds : []);
+        setBaselineCourseIds(ids);
+        setSelectedCourseIds(new Set(ids));
+      } catch (e) {
+        if (cancelled) return;
+        toast.error(e instanceof Error ? e.message : "Failed to load course assignments");
+      } finally {
+        if (!cancelled) setLoadingCourses(false);
+      }
+    };
+    void loadAssignments();
+    return () => {
+      cancelled = true;
+    };
+  }, [canManageCourseAccess, onLoadCourseAssignments, open, user.id]);
 
   return (
     <div
@@ -2366,13 +2723,95 @@ function MobileUserCard(props: {
                     ) : null}
                   </div>
 
+                  {canManageCourseAccess ? (
+                    <div>
+                      <label className={`block text-xs font-medium mb-1 ${rowMuted}`}>Course access</label>
+                      {assignableCoursesLoading || loadingCourses ? (
+                        <div className={`text-sm ${rowMuted}`}>Loading course access…</div>
+                      ) : assignableCourses.length === 0 ? (
+                        <div className={`text-sm ${rowMuted}`}>No courses available in this organization.</div>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className={`max-h-48 overflow-auto rounded-md border p-2 ${selected ? "border-white/20" : ""}`}>
+                            <div className="space-y-1">
+                              {assignableCourses.map((course) => {
+                                const cid = course.id;
+                                const checked = selectedCourseIds.has(cid);
+                                const title = (course.title ?? "").trim() || "(untitled)";
+                                return (
+                                  <label key={cid} className="flex items-center gap-2 rounded-sm px-2 py-1 text-sm hover:bg-muted/30">
+                                    <input
+                                      type="checkbox"
+                                      className="h-4 w-4 accent-primary"
+                                      checked={checked}
+                                      onChange={(e) => {
+                                        const nextChecked = e.target.checked;
+                                        setSelectedCourseIds((prev) => {
+                                          const next = new Set(prev);
+                                          if (nextChecked) next.add(cid);
+                                          else next.delete(cid);
+                                          return next;
+                                        });
+                                      }}
+                                    />
+                                    <span className={`truncate ${rowText}`}>{title}</span>
+                                    {course.is_published ? null : (
+                                      <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
+                                        Draft
+                                      </span>
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              className={outlineButtonClass}
+                              disabled={savingCourses || !courseAssignmentsDirty}
+                              onClick={async () => {
+                                setSavingCourses(true);
+                                const t = toast.loading("Saving course access…");
+                                try {
+                                  const nextIds = Array.from(selectedCourseIds);
+                                  const res = await onSaveCourseAssignments(user.id, nextIds);
+                                  setBaselineCourseIds(new Set(nextIds));
+                                  toast.success(res.message || "Course access updated.", { id: t });
+                                } catch (e) {
+                                  toast.error(e instanceof Error ? e.message : "Failed to save course access", { id: t });
+                                } finally {
+                                  setSavingCourses(false);
+                                }
+                              }}
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              disabled={savingCourses || !courseAssignmentsDirty}
+                              onClick={() => setSelectedCourseIds(new Set(baselineCourseIds))}
+                              className={selected ? "text-white hover:bg-white/10 hover:text-white" : ""}
+                            >
+                              Reset
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                      <HelpText className={selected ? "text-white/80" : ""}>
+                        Select exactly which courses this member can see and start.
+                      </HelpText>
+                    </div>
+                  ) : null}
+
                   <div className="flex w-full">
                     <Button
                       type="button"
-                      disabled={savingRole || savingOrg}
+                      disabled={savingRole || savingOrg || savingCourses}
                       onClick={() => {
                         setSelectedRole(user.role);
                         setSelectedOrgId(user.organization_id ?? "");
+                        setSelectedCourseIds(new Set(baselineCourseIds));
                       }}
                       className="w-full min-h-[40px] border border-primary bg-primary text-white hover:bg-white hover:text-foreground hover:border-primary"
                     >
@@ -2380,7 +2819,7 @@ function MobileUserCard(props: {
                     </Button>
                   </div>
                   <HelpText className={selected ? "text-white/80 text-right" : "text-right"}>
-                    Resets Role and Organization to their original values (does not save).
+                    Resets unsaved Access & assignment changes (does not save).
                   </HelpText>
                 </div>
               )}

@@ -128,6 +128,38 @@ export const useUsers = (organizationId?: string) => {
     return usersApi.sendPasswordSetupLink(userId);
   };
 
+  /**
+   * Fetch org-admin assignable courses list.
+   */
+  const getAssignableCourses = useCallback(async () => {
+    return usersApi.getAssignableCourses();
+  }, []);
+
+  /**
+   * Fetch course assignment IDs for one user.
+   */
+  const getUserCourseAssignments = useCallback(async (userId: string) => {
+    return usersApi.getUserCourseAssignments(userId);
+  }, []);
+
+  /**
+   * Replace course assignments for one user.
+   */
+  const replaceUserCourseAssignments = useCallback(async (userId: string, courseIds: string[]) => {
+    return usersApi.replaceUserCourseAssignments(userId, courseIds);
+  }, []);
+
+  /**
+   * Bulk assign/remove a course for selected users.
+   */
+  const bulkCourseAssignments = useCallback(async (input: {
+    user_ids: string[];
+    course_id: string;
+    action: "assign" | "remove";
+  }) => {
+    return usersApi.bulkCourseAssignments(input);
+  }, []);
+
   return {
     users,
     callerRole,
@@ -143,5 +175,9 @@ export const useUsers = (organizationId?: string) => {
     assignOrganization,
     bulkAssignOrganization,
     sendPasswordSetupLink,
+    getAssignableCourses,
+    getUserCourseAssignments,
+    replaceUserCourseAssignments,
+    bulkCourseAssignments,
   };
 };

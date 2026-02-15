@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { LogOut, Loader2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { NAV_ICONS, type NavItem } from "@/config/navigation";
 import { ROLE_PRIMARY_CACHE_KEY } from "@/lib/theme/themeConstants";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type DashboardSidebarClientProps = {
   menuItems: NavItem[];
@@ -16,8 +16,49 @@ export function DashboardSidebarClient({ menuItems, canLogout }: DashboardSideba
   const pathname = usePathname();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const [collapseTooltipSide, setCollapseTooltipSide] = useState<"left" | "right">("right");
   const collapseToggleRef = useRef<HTMLButtonElement | null>(null);
+  const userToggledCollapsedRef = useRef(false);
+
+  const isLearnRoute = (() => {
+    // Match: /org/<orgKey>/courses/<courseKey>/learn
+    // (works for both uuid and slug courseKey)
+    if (!pathname) return false;
+    return /^\/org\/[^/]+\/courses\/[^/]+\/learn(?:\/|$)/.test(pathname);
+  })();
+
+  // Auto-collapse sidebar on screens < 1024px (Tailwind's `lg` breakpoint),
+  // while still letting the user manually expand/collapse via the toggle button.
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1024px)");
+
+    // Apply current state (unless user already toggled, or we're on /learn where we force-collapsed).
+    if (!isLearnRoute && !userToggledCollapsedRef.current) {
+      setCollapsed(mq.matches);
+    }
+
+    const onChange = (e: MediaQueryListEvent) => {
+      if (isLearnRoute) return;
+      if (userToggledCollapsedRef.current) return;
+      setCollapsed(e.matches);
+    };
+
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [isLearnRoute]);
+
+  // On the learning flow, default to collapsed on ALL devices.
+  // User can still expand/collapse anytime via the toggle button (manual override).
+  useEffect(() => {
+    userToggledCollapsedRef.current = false;
+    if (isLearnRoute) {
+      setCollapsed(true);
+      return;
+    }
+
+    // When leaving learn route, re-apply responsive default.
+    const mq = window.matchMedia("(max-width: 1024px)");
+    setCollapsed(mq.matches);
+  }, [isLearnRoute]);
 
   // Avoid UI flashes on public pages (login, forgot/reset password, etc.).
   // On these routes we only show the branding; nav/logout should not appear.
@@ -67,7 +108,7 @@ export function DashboardSidebarClient({ menuItems, canLogout }: DashboardSideba
 
   return (
     <aside
-      className={`shrink-0 bg-primary text-white flex flex-col h-[calc(100vh-4rem)] sticky top-16 z-60
+      className={`shrink-0 bg-primary text-white flex flex-col h-[calc(100vh-4.5rem)] sticky top-16 z-60
         transition-all duration-200 ease-in-out
         ${collapsed ? "w-[70px] rounded-tr-[50px]" : "w-[260px] rounded-tr-[100px]"}
       `}
@@ -85,7 +126,10 @@ export function DashboardSidebarClient({ menuItems, canLogout }: DashboardSideba
           <div className="relative group">
             <button
               type="button"
-              onClick={() => setCollapsed((v) => !v)}
+              onClick={() => {
+                userToggledCollapsedRef.current = true;
+                setCollapsed((v) => !v);
+              }}
               aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
               ref={collapseToggleRef}
               onMouseEnter={() => {
@@ -93,7 +137,7 @@ export function DashboardSidebarClient({ menuItems, canLogout }: DashboardSideba
                 if (!el) return;
                 const rect = el.getBoundingClientRect();
                 const shouldFlip = rect.left < 140;
-                setCollapseTooltipSide(shouldFlip ? "right" : "left");
+                void shouldFlip;
               }}
               className={`
                 w-full flex items-center rounded-md transition-colors

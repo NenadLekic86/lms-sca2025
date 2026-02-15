@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -119,4 +120,244 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* RichText (TipTap) controlled styling (secure: data-attrs, no inline styles) */
+/* -------------------------------------------------------------------------- */
+
+:root {
+  /* Text colors (Tailwind-ish palette, hand-picked) */
+  --rt-slate-900: #0f172a;
+  --rt-slate-700: #334155;
+  --rt-gray-900: #111827;
+  --rt-gray-700: #374151;
+  --rt-zinc-900: #18181b;
+  --rt-neutral-900: #171717;
+  --rt-stone-900: #1c1917;
+  --rt-red-700: #b91c1c;
+  --rt-red-500: #ef4444;
+  --rt-orange-700: #c2410c;
+  --rt-orange-500: #f97316;
+  --rt-amber-700: #b45309;
+  --rt-yellow-800: #854d0e;
+  --rt-lime-700: #4d7c0f;
+  --rt-green-700: #15803d;
+  --rt-green-500: #22c55e;
+  --rt-emerald-700: #047857;
+  --rt-teal-700: #0f766e;
+  --rt-teal-500: #14b8a6;
+  --rt-cyan-700: #0e7490;
+  --rt-sky-700: #0369a1;
+  --rt-blue-700: #1d4ed8;
+  --rt-blue-500: #3b82f6;
+  --rt-indigo-700: #4338ca;
+  --rt-violet-700: #6d28d9;
+  --rt-purple-700: #7e22ce;
+  --rt-purple-500: #a855f7;
+  --rt-fuchsia-700: #a21caf;
+  --rt-pink-700: #be185d;
+  --rt-rose-700: #be123c;
+
+  /* Background highlight colors (lighter shades) */
+  /* More saturated (solid) so the palette doesn't look "transparent". */
+  --rt-bg-slate-900: #cbd5e1;
+  --rt-bg-slate-700: #cbd5e1;
+  --rt-bg-gray-900: #d1d5db;
+  --rt-bg-gray-700: #d1d5db;
+  --rt-bg-zinc-900: #d4d4d8;
+  --rt-bg-neutral-900: #d4d4d4;
+  --rt-bg-stone-900: #d6d3d1;
+  --rt-bg-red-700: #fecaca;
+  --rt-bg-red-500: #fca5a5;
+  --rt-bg-orange-700: #fed7aa;
+  --rt-bg-orange-500: #fdba74;
+  --rt-bg-amber-700: #fde68a;
+  --rt-bg-yellow-800: #fef08a;
+  --rt-bg-lime-700: #d9f99d;
+  --rt-bg-green-700: #bbf7d0;
+  --rt-bg-green-500: #86efac;
+  --rt-bg-emerald-700: #a7f3d0;
+  --rt-bg-teal-700: #99f6e4;
+  --rt-bg-teal-500: #5eead4;
+  --rt-bg-cyan-700: #a5f3fc;
+  --rt-bg-sky-700: #bae6fd;
+  --rt-bg-blue-700: #bfdbfe;
+  --rt-bg-blue-500: #93c5fd;
+  --rt-bg-indigo-700: #c7d2fe;
+  --rt-bg-violet-700: #ddd6fe;
+  --rt-bg-purple-700: #e9d5ff;
+  --rt-bg-purple-500: #f0abfc;
+  --rt-bg-fuchsia-700: #f5d0fe;
+  --rt-bg-pink-700: #fbcfe8;
+  --rt-bg-rose-700: #fecdd3;
+}
+
+/* Text color mark */
+[data-rt-color="slate-900"] { color: var(--rt-slate-900); }
+[data-rt-color="slate-700"] { color: var(--rt-slate-700); }
+[data-rt-color="gray-900"] { color: var(--rt-gray-900); }
+[data-rt-color="gray-700"] { color: var(--rt-gray-700); }
+[data-rt-color="zinc-900"] { color: var(--rt-zinc-900); }
+[data-rt-color="neutral-900"] { color: var(--rt-neutral-900); }
+[data-rt-color="stone-900"] { color: var(--rt-stone-900); }
+[data-rt-color="red-700"] { color: var(--rt-red-700); }
+[data-rt-color="red-500"] { color: var(--rt-red-500); }
+[data-rt-color="orange-700"] { color: var(--rt-orange-700); }
+[data-rt-color="orange-500"] { color: var(--rt-orange-500); }
+[data-rt-color="amber-700"] { color: var(--rt-amber-700); }
+[data-rt-color="yellow-800"] { color: var(--rt-yellow-800); }
+[data-rt-color="lime-700"] { color: var(--rt-lime-700); }
+[data-rt-color="green-700"] { color: var(--rt-green-700); }
+[data-rt-color="green-500"] { color: var(--rt-green-500); }
+[data-rt-color="emerald-700"] { color: var(--rt-emerald-700); }
+[data-rt-color="teal-700"] { color: var(--rt-teal-700); }
+[data-rt-color="teal-500"] { color: var(--rt-teal-500); }
+[data-rt-color="cyan-700"] { color: var(--rt-cyan-700); }
+[data-rt-color="sky-700"] { color: var(--rt-sky-700); }
+[data-rt-color="blue-700"] { color: var(--rt-blue-700); }
+[data-rt-color="blue-500"] { color: var(--rt-blue-500); }
+[data-rt-color="indigo-700"] { color: var(--rt-indigo-700); }
+[data-rt-color="violet-700"] { color: var(--rt-violet-700); }
+[data-rt-color="purple-700"] { color: var(--rt-purple-700); }
+[data-rt-color="purple-500"] { color: var(--rt-purple-500); }
+[data-rt-color="fuchsia-700"] { color: var(--rt-fuchsia-700); }
+[data-rt-color="pink-700"] { color: var(--rt-pink-700); }
+[data-rt-color="rose-700"] { color: var(--rt-rose-700); }
+
+/* Background highlight mark */
+[data-rt-bg] {
+  border-radius: 0.2em;
+  padding: 0 0.15em;
+}
+[data-rt-bg="slate-900"] { background: var(--rt-bg-slate-900); }
+[data-rt-bg="slate-700"] { background: var(--rt-bg-slate-700); }
+[data-rt-bg="gray-900"] { background: var(--rt-bg-gray-900); }
+[data-rt-bg="gray-700"] { background: var(--rt-bg-gray-700); }
+[data-rt-bg="zinc-900"] { background: var(--rt-bg-zinc-900); }
+[data-rt-bg="neutral-900"] { background: var(--rt-bg-neutral-900); }
+[data-rt-bg="stone-900"] { background: var(--rt-bg-stone-900); }
+[data-rt-bg="red-700"] { background: var(--rt-bg-red-700); }
+[data-rt-bg="red-500"] { background: var(--rt-bg-red-500); }
+[data-rt-bg="orange-700"] { background: var(--rt-bg-orange-700); }
+[data-rt-bg="orange-500"] { background: var(--rt-bg-orange-500); }
+[data-rt-bg="amber-700"] { background: var(--rt-bg-amber-700); }
+[data-rt-bg="yellow-800"] { background: var(--rt-bg-yellow-800); }
+[data-rt-bg="lime-700"] { background: var(--rt-bg-lime-700); }
+[data-rt-bg="green-700"] { background: var(--rt-bg-green-700); }
+[data-rt-bg="green-500"] { background: var(--rt-bg-green-500); }
+[data-rt-bg="emerald-700"] { background: var(--rt-bg-emerald-700); }
+[data-rt-bg="teal-700"] { background: var(--rt-bg-teal-700); }
+[data-rt-bg="teal-500"] { background: var(--rt-bg-teal-500); }
+[data-rt-bg="cyan-700"] { background: var(--rt-bg-cyan-700); }
+[data-rt-bg="sky-700"] { background: var(--rt-bg-sky-700); }
+[data-rt-bg="blue-700"] { background: var(--rt-bg-blue-700); }
+[data-rt-bg="blue-500"] { background: var(--rt-bg-blue-500); }
+[data-rt-bg="indigo-700"] { background: var(--rt-bg-indigo-700); }
+[data-rt-bg="violet-700"] { background: var(--rt-bg-violet-700); }
+[data-rt-bg="purple-700"] { background: var(--rt-bg-purple-700); }
+[data-rt-bg="purple-500"] { background: var(--rt-bg-purple-500); }
+[data-rt-bg="fuchsia-700"] { background: var(--rt-bg-fuchsia-700); }
+[data-rt-bg="pink-700"] { background: var(--rt-bg-pink-700); }
+[data-rt-bg="rose-700"] { background: var(--rt-bg-rose-700); }
+
+/* Swatches (toolbar palette) */
+[data-rt-swatch] { opacity: 1 !important; }
+[data-rt-swatch="text"][data-token="slate-900"] { background: var(--rt-slate-900); }
+[data-rt-swatch="text"][data-token="slate-700"] { background: var(--rt-slate-700); }
+[data-rt-swatch="text"][data-token="gray-900"] { background: var(--rt-gray-900); }
+[data-rt-swatch="text"][data-token="gray-700"] { background: var(--rt-gray-700); }
+[data-rt-swatch="text"][data-token="zinc-900"] { background: var(--rt-zinc-900); }
+[data-rt-swatch="text"][data-token="neutral-900"] { background: var(--rt-neutral-900); }
+[data-rt-swatch="text"][data-token="stone-900"] { background: var(--rt-stone-900); }
+[data-rt-swatch="text"][data-token="red-700"] { background: var(--rt-red-700); }
+[data-rt-swatch="text"][data-token="red-500"] { background: var(--rt-red-500); }
+[data-rt-swatch="text"][data-token="orange-700"] { background: var(--rt-orange-700); }
+[data-rt-swatch="text"][data-token="orange-500"] { background: var(--rt-orange-500); }
+[data-rt-swatch="text"][data-token="amber-700"] { background: var(--rt-amber-700); }
+[data-rt-swatch="text"][data-token="yellow-800"] { background: var(--rt-yellow-800); }
+[data-rt-swatch="text"][data-token="lime-700"] { background: var(--rt-lime-700); }
+[data-rt-swatch="text"][data-token="green-700"] { background: var(--rt-green-700); }
+[data-rt-swatch="text"][data-token="green-500"] { background: var(--rt-green-500); }
+[data-rt-swatch="text"][data-token="emerald-700"] { background: var(--rt-emerald-700); }
+[data-rt-swatch="text"][data-token="teal-700"] { background: var(--rt-teal-700); }
+[data-rt-swatch="text"][data-token="teal-500"] { background: var(--rt-teal-500); }
+[data-rt-swatch="text"][data-token="cyan-700"] { background: var(--rt-cyan-700); }
+[data-rt-swatch="text"][data-token="sky-700"] { background: var(--rt-sky-700); }
+[data-rt-swatch="text"][data-token="blue-700"] { background: var(--rt-blue-700); }
+[data-rt-swatch="text"][data-token="blue-500"] { background: var(--rt-blue-500); }
+[data-rt-swatch="text"][data-token="indigo-700"] { background: var(--rt-indigo-700); }
+[data-rt-swatch="text"][data-token="violet-700"] { background: var(--rt-violet-700); }
+[data-rt-swatch="text"][data-token="purple-700"] { background: var(--rt-purple-700); }
+[data-rt-swatch="text"][data-token="purple-500"] { background: var(--rt-purple-500); }
+[data-rt-swatch="text"][data-token="fuchsia-700"] { background: var(--rt-fuchsia-700); }
+[data-rt-swatch="text"][data-token="pink-700"] { background: var(--rt-pink-700); }
+[data-rt-swatch="text"][data-token="rose-700"] { background: var(--rt-rose-700); }
+
+[data-rt-swatch="bg"][data-token="slate-900"] { background: var(--rt-bg-slate-900); }
+[data-rt-swatch="bg"][data-token="slate-700"] { background: var(--rt-bg-slate-700); }
+[data-rt-swatch="bg"][data-token="gray-900"] { background: var(--rt-bg-gray-900); }
+[data-rt-swatch="bg"][data-token="gray-700"] { background: var(--rt-bg-gray-700); }
+[data-rt-swatch="bg"][data-token="zinc-900"] { background: var(--rt-bg-zinc-900); }
+[data-rt-swatch="bg"][data-token="neutral-900"] { background: var(--rt-bg-neutral-900); }
+[data-rt-swatch="bg"][data-token="stone-900"] { background: var(--rt-bg-stone-900); }
+[data-rt-swatch="bg"][data-token="red-700"] { background: var(--rt-bg-red-700); }
+[data-rt-swatch="bg"][data-token="red-500"] { background: var(--rt-bg-red-500); }
+[data-rt-swatch="bg"][data-token="orange-700"] { background: var(--rt-bg-orange-700); }
+[data-rt-swatch="bg"][data-token="orange-500"] { background: var(--rt-bg-orange-500); }
+[data-rt-swatch="bg"][data-token="amber-700"] { background: var(--rt-bg-amber-700); }
+[data-rt-swatch="bg"][data-token="yellow-800"] { background: var(--rt-bg-yellow-800); }
+[data-rt-swatch="bg"][data-token="lime-700"] { background: var(--rt-bg-lime-700); }
+[data-rt-swatch="bg"][data-token="green-700"] { background: var(--rt-bg-green-700); }
+[data-rt-swatch="bg"][data-token="green-500"] { background: var(--rt-bg-green-500); }
+[data-rt-swatch="bg"][data-token="emerald-700"] { background: var(--rt-bg-emerald-700); }
+[data-rt-swatch="bg"][data-token="teal-700"] { background: var(--rt-bg-teal-700); }
+[data-rt-swatch="bg"][data-token="teal-500"] { background: var(--rt-bg-teal-500); }
+[data-rt-swatch="bg"][data-token="cyan-700"] { background: var(--rt-bg-cyan-700); }
+[data-rt-swatch="bg"][data-token="sky-700"] { background: var(--rt-bg-sky-700); }
+[data-rt-swatch="bg"][data-token="blue-700"] { background: var(--rt-bg-blue-700); }
+[data-rt-swatch="bg"][data-token="blue-500"] { background: var(--rt-bg-blue-500); }
+[data-rt-swatch="bg"][data-token="indigo-700"] { background: var(--rt-bg-indigo-700); }
+[data-rt-swatch="bg"][data-token="violet-700"] { background: var(--rt-bg-violet-700); }
+[data-rt-swatch="bg"][data-token="purple-700"] { background: var(--rt-bg-purple-700); }
+[data-rt-swatch="bg"][data-token="purple-500"] { background: var(--rt-bg-purple-500); }
+[data-rt-swatch="bg"][data-token="fuchsia-700"] { background: var(--rt-bg-fuchsia-700); }
+[data-rt-swatch="bg"][data-token="pink-700"] { background: var(--rt-bg-pink-700); }
+[data-rt-swatch="bg"][data-token="rose-700"] { background: var(--rt-bg-rose-700); }
+
+/* Info callout block */
+div[data-callout="info"] {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  background: rgba(59, 130, 246, 0.10);
+}
+
+div[data-callout="info"]::before {
+  content: "i";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  background: rgba(59, 130, 246, 0.20);
+  color: rgb(29, 78, 216);
+  font-weight: 700;
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
+div[data-callout="info"] [data-callout-body] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Make callout text align nicely inside prose */
+.prose div[data-callout="info"] {
+  margin-top: 1.25em;
+  margin-bottom: 1.25em;
 }

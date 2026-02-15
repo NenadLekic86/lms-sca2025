@@ -1,6 +1,7 @@
 import Link from "next/link";
+import Image from "next/image";
 import { notFound, redirect } from "next/navigation";
-import { BookOpen, Play, CheckCircle, Circle } from "lucide-react";
+import { BookOpen, Play, CheckCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
@@ -10,10 +11,31 @@ export const fetchCache = "force-no-store";
 
 type CourseRow = {
   id: string;
+  slug?: string | null;
   title: string | null;
   excerpt: string | null;
   is_published: boolean | null;
+  cover_image_url?: string | null;
+  builder_version?: number | null;
+  created_at?: string | null;
 };
+
+function pickCoverGradient(seed: string) {
+  const gradients = [
+    "bg-gradient-to-br from-indigo-500 via-purple-500 to-fuchsia-500",
+    "bg-gradient-to-br from-slate-700 via-slate-800 to-black",
+    "bg-gradient-to-br from-rose-500 via-red-500 to-amber-500",
+    "bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-500",
+    "bg-gradient-to-br from-blue-500 via-sky-500 to-cyan-400",
+    "bg-gradient-to-br from-violet-500 via-purple-500 to-pink-500",
+    "bg-gradient-to-br from-amber-400 via-orange-500 to-rose-500",
+    "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-400",
+    "bg-gradient-to-br from-neutral-700 via-zinc-800 to-slate-900",
+  ];
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  return gradients[hash % gradients.length];
+}
 
 export default async function StudentMyCoursesPage({ params }: { params: Promise<{ orgId: string }> }) {
   const { user, error } = await getServerUser();
@@ -50,24 +72,44 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
     courseIds.length > 0
       ? await supabase
           .from("courses")
-          .select("id, title, excerpt, is_published")
+          .select("id, slug, title, excerpt, is_published, cover_image_url, builder_version, created_at")
           .in("id", courseIds)
           .order("created_at", { ascending: false })
       : { data: [] };
 
-  const courses = (Array.isArray(coursesData) ? coursesData : []) as CourseRow[];
+  const coursesAll = (Array.isArray(coursesData) ? coursesData : []) as CourseRow[];
 
-  const { data: resourcesData } = courseIds.length
-    ? await supabase.from("course_resources").select("id, course_id").in("course_id", courseIds)
+  const v1CourseIds = coursesAll
+    .filter((c) => (c.builder_version ?? null) !== 2)
+    .map((c) => c.id);
+  const v2CourseIds = coursesAll
+    .filter((c) => (c.builder_version ?? null) === 2)
+    .map((c) => c.id);
+
+  // V1 progress: resources/videos + completion rows.
+  const { data: resourcesData } = v1CourseIds.length
+    ? await supabase.from("course_resources").select("id, course_id").in("course_id", v1CourseIds)
     : { data: [] };
-  const { data: videosData } = courseIds.length
-    ? await supabase.from("course_videos").select("id, course_id").in("course_id", courseIds)
+  const { data: videosData } = v1CourseIds.length
+    ? await supabase.from("course_videos").select("id, course_id").in("course_id", v1CourseIds)
     : { data: [] };
-  const { data: progressData } = courseIds.length
+  const { data: progressData } = v1CourseIds.length
     ? await supabase
         .from("course_content_progress")
         .select("course_id, item_type, item_id, completed_at")
-        .in("course_id", courseIds)
+        .in("course_id", v1CourseIds)
+        .eq("user_id", user.id)
+    : { data: [] };
+
+  // V2 progress: total items + visits.
+  const { data: v2ItemsData } = v2CourseIds.length
+    ? await supabase.from("course_topic_items").select("id, course_id").in("course_id", v2CourseIds)
+    : { data: [] };
+  const { data: v2VisitsData } = v2CourseIds.length
+    ? await supabase
+        .from("course_v2_item_visits")
+        .select("course_id, item_id, visited_at")
+        .in("course_id", v2CourseIds)
         .eq("user_id", user.id)
     : { data: [] };
 
@@ -80,12 +122,22 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
     if (!v.course_id) continue;
     totalByCourse[v.course_id] = (totalByCourse[v.course_id] || 0) + 1;
   }
+  for (const it of (Array.isArray(v2ItemsData) ? v2ItemsData : []) as Array<{ course_id?: string | null }>) {
+    if (!it.course_id) continue;
+    totalByCourse[it.course_id] = (totalByCourse[it.course_id] || 0) + 1;
+  }
 
   const completedByCourse: Record<string, number> = {};
   for (const p of (Array.isArray(progressData) ? progressData : []) as Array<{ course_id?: string | null; completed_at?: string | null }>) {
     if (!p.course_id) continue;
     if (!p.completed_at) continue;
     completedByCourse[p.course_id] = (completedByCourse[p.course_id] || 0) + 1;
+  }
+  for (const v of (Array.isArray(v2VisitsData) ? v2VisitsData : []) as Array<{ course_id?: string | null; visited_at?: string | null }>) {
+    if (!v.course_id) continue;
+    if (!v.visited_at) continue;
+    // For V2 we treat "visited" as progress for now.
+    completedByCourse[v.course_id] = (completedByCourse[v.course_id] || 0) + 1;
   }
 
   const derivedStatus = (courseId: string) => {
@@ -96,27 +148,20 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
     return "not_started";
   };
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "completed":
-        return <CheckCircle className="h-5 w-5 text-green-600" />;
-      case "in_progress":
-        return <Play className="h-5 w-5 text-blue-600" />;
-      default:
-        return <Circle className="h-5 w-5 text-muted-foreground" />;
-    }
-  };
-
   const getStatusLabel = (status: string) => {
     switch (status) {
       case "completed":
         return { label: "Completed", class: "bg-green-100 text-green-800" };
       case "in_progress":
-        return { label: "In Progress", class: "bg-blue-100 text-blue-800" };
+        // Member is actively enrolled and has started (visited progress exists).
+        return { label: "Enrolling", class: "bg-blue-100 text-blue-800" };
       default:
         return { label: "Not Started", class: "bg-gray-100 text-gray-800" };
     }
   };
+
+  // My Courses should show only started/in-progress courses (not-started belongs in Courses catalog).
+  const courses = coursesAll.filter((c) => derivedStatus(c.id) !== "not_started");
 
   const inProgressCount = courses.filter((c) => derivedStatus(c.id) === "in_progress").length;
   const completedCount = courses.filter((c) => derivedStatus(c.id) === "completed").length;
@@ -170,7 +215,7 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {courses.length === 0 ? (
           <div className="col-span-full rounded-lg border bg-card p-10 text-center text-muted-foreground">
-            You are not enrolled in any courses yet.
+            You have not started any courses yet.
           </div>
         ) : (
           courses.map((course) => {
@@ -182,46 +227,63 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
             const title = (course.title ?? "").trim() || "(untitled)";
             const excerpt = (course.excerpt ?? "").trim();
 
+            const coverUrl = (course.cover_image_url ?? "").trim();
+
             return (
-              <div key={course.id} className="bg-card border rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow">
-                <div className="flex items-start gap-4">
-                  <div className="h-14 w-14 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                    {getStatusIcon(status)}
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-lg font-semibold text-foreground">{title}</h3>
-                        <p className="text-sm text-muted-foreground mt-1">{excerpt || "No excerpt yet."}</p>
-                      </div>
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusInfo.class}`}>
-                        {statusInfo.label}
-                      </span>
+              <article
+                key={course.id}
+                className="rounded-xl border bg-card shadow-sm overflow-hidden transition-all hover:shadow-md hover:-translate-y-0.5"
+              >
+                <div className={`h-36 relative ${coverUrl ? "" : pickCoverGradient(course.id)}`}>
+                  {coverUrl ? (
+                    <Image
+                      src={coverUrl}
+                      alt={`${title} cover`}
+                      fill
+                      className="object-cover"
+                      sizes="(max-width: 1024px) 100vw, 520px"
+                    />
+                  ) : null}
+                  <div className="absolute inset-0 bg-linear-to-t from-black/40 via-black/10 to-transparent" />
+                  <div className="absolute left-4 bottom-4 flex items-center gap-2 text-white/90">
+                    <div className="h-9 w-9 rounded-lg bg-white/15 ring-1 ring-white/20 backdrop-blur flex items-center justify-center">
+                      <BookOpen className="h-5 w-5" />
                     </div>
-
-                    <div className="mt-4">
-                      <div className="flex justify-between text-sm mb-1">
-                        <span className="text-muted-foreground">Progress</span>
-                        <span className="font-medium text-foreground">
-                          {done}/{total} • {progress}%
-                        </span>
-                      </div>
-                      <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${progress === 100 ? "bg-green-500" : "bg-primary"}`} style={{ width: `${progress}%` }} />
-                      </div>
-                    </div>
-
-                    <div className="mt-4">
-                      <Button className="w-full gap-2" asChild>
-                        <Link href={`/org/${orgSlug}/courses/${course.id}/learn`}>
-                          <Play className="h-4 w-4" />
-                          {status === "completed" ? "Review Course" : status === "in_progress" ? "Continue Learning" : "Start Course"}
-                        </Link>
-                      </Button>
-                    </div>
+                    <span className="text-xs font-medium tracking-wide uppercase">My course</span>
                   </div>
                 </div>
-              </div>
+
+                <div className="p-5 space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="text-lg font-semibold text-foreground truncate">{title}</h3>
+                      <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{excerpt || "No excerpt yet."}</p>
+                    </div>
+                    <span className={`shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusInfo.class}`}>
+                      {statusInfo.label}
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-muted-foreground">Progress</span>
+                      <span className="font-medium text-foreground">
+                        {done}/{total} • {progress}%
+                      </span>
+                    </div>
+                    <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${progress === 100 ? "bg-green-500" : "bg-primary"}`} style={{ width: `${progress}%` }} />
+                    </div>
+                  </div>
+
+                  <Button className="w-full gap-2" asChild>
+                    <Link href={`/org/${orgSlug}/courses/${(course.slug ?? "").trim() || course.id}/learn`}>
+                      <Play className="h-4 w-4" />
+                      Continue Learning
+                    </Link>
+                  </Button>
+                </div>
+              </article>
             );
           })
         )}

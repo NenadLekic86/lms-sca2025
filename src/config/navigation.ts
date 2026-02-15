@@ -102,6 +102,7 @@ export const NAVIGATION: Record<Role, NavItem[]> = {
     { label: 'All Courses', href: '/org/{orgId}/courses', iconKey: "BookOpen" },
     { label: 'My Courses', href: '/org/{orgId}/my-courses', iconKey: "BookOpen" },
     { label: 'My Tests', href: '/org/{orgId}/my-tests', iconKey: "ClipboardList" },
+    { label: 'My Quizzes', href: '/org/{orgId}/my-quizzes', iconKey: "FileText" },
     { label: 'My Certificates', href: '/org/{orgId}/certificates', iconKey: "Award" },
     { label: 'My Profile', href: '/org/{orgId}/profile', iconKey: "User" },
   ],

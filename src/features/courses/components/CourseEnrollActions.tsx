@@ -11,13 +11,19 @@ import { fetchJson } from "@/lib/api";
 export function CourseEnrollActions({
   orgId,
   courseId,
+  courseHrefKey,
   isEnrolled,
   disabled,
+  className,
 }: {
   orgId: string;
+  // UUID used for API calls / DB
   courseId: string;
+  // Slug (preferred) or UUID used in URLs
+  courseHrefKey: string;
   isEnrolled: boolean;
   disabled: boolean;
+  className?: string;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -25,7 +31,7 @@ export function CourseEnrollActions({
   async function enrollAndStart() {
     if (disabled) return;
     if (isEnrolled) {
-      router.push(`/org/${orgId}/courses/${courseId}/learn`);
+      router.push(`/org/${orgId}/courses/${courseHrefKey}/learn`);
       return;
     }
 
@@ -33,7 +39,7 @@ export function CourseEnrollActions({
     try {
       const { message } = await fetchJson<{ enrollment: unknown }>(`/api/courses/${courseId}/enroll`, { method: "POST" });
       toast.success(message || "Enrollment started.");
-      router.push(`/org/${orgId}/courses/${courseId}/learn`);
+      router.push(`/org/${orgId}/courses/${courseHrefKey}/learn`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to enroll");
     } finally {
@@ -42,7 +48,7 @@ export function CourseEnrollActions({
   }
 
   return (
-    <Button onClick={() => void enrollAndStart()} disabled={disabled || loading} className="gap-2">
+    <Button onClick={() => void enrollAndStart()} disabled={disabled || loading} className={["gap-2", className].filter(Boolean).join(" ")}>
       {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
       {isEnrolled ? "Continue learning" : "Start learning"}
     </Button>
