@@ -66,7 +66,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   // Members must be explicitly assigned to the course by org admin.
   const { data: assignment, error: assignmentError } = await admin
     .from("course_member_assignments")
-    .select("id")
+    .select("id, access_expires_at")
     .eq("organization_id", orgId)
     .eq("course_id", id)
     .eq("user_id", caller.id)
@@ -93,6 +93,22 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       publicMessage: "You are not assigned to this course.",
     });
     return apiError("FORBIDDEN", "You are not assigned to this course.", { status: 403 });
+  }
+  const expiresAtIso = (assignment as { access_expires_at?: string | null } | null)?.access_expires_at ?? null;
+  if (expiresAtIso) {
+    const expiresAtMs = new Date(expiresAtIso).getTime();
+    if (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now()) {
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Your access to this course has expired.",
+        details: { course_id: id, access_expires_at: expiresAtIso },
+      });
+      return apiError("FORBIDDEN", "Your access to this course has expired.", { status: 403 });
+    }
   }
 
   // Already enrolled? (idempotent)

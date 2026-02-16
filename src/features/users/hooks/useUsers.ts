@@ -145,8 +145,11 @@ export const useUsers = (organizationId?: string) => {
   /**
    * Replace course assignments for one user.
    */
-  const replaceUserCourseAssignments = useCallback(async (userId: string, courseIds: string[]) => {
-    return usersApi.replaceUserCourseAssignments(userId, courseIds);
+  const replaceUserCourseAssignments = useCallback(async (
+    userId: string,
+    input: Parameters<typeof usersApi.replaceUserCourseAssignments>[1]
+  ) => {
+    return usersApi.replaceUserCourseAssignments(userId, input);
   }, []);
 
   /**
@@ -156,6 +159,7 @@ export const useUsers = (organizationId?: string) => {
     user_ids: string[];
     course_id: string;
     action: "assign" | "remove";
+    access?: Parameters<typeof usersApi.bulkCourseAssignments>[0]["access"];
   }) => {
     return usersApi.bulkCourseAssignments(input);
   }, []);

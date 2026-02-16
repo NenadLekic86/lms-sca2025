@@ -32,6 +32,8 @@ type CourseRow = {
   updated_at: string | null;
 };
 
+export const runtime = "nodejs";
+
 function isOrgAdminOwner(caller: { role: string; organization_id?: string | null }, course: { organization_id: string | null }): boolean {
   return caller.role === "organization_admin" && !!caller.organization_id && caller.organization_id === course.organization_id;
 }

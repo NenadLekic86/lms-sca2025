@@ -1,22 +1,69 @@
 'use client';
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Mail, Lock } from "lucide-react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase/client";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
 export function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const notice = searchParams.get('notice');
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [switchPrompt, setSwitchPrompt] = useState<{ currentEmail: string; targetEmail: string } | null>(null);
+  const pendingCredsRef = useRef<{ email: string; password: string } | null>(null);
+  const watchdogRef = useRef<number | null>(null);
+
+  function clearWatchdog() {
+    if (watchdogRef.current) {
+      window.clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  }
+
+  function startWatchdog() {
+    clearWatchdog();
+    watchdogRef.current = window.setTimeout(() => {
+      setIsLoading(false);
+      setError("Sign-in is taking longer than expected. Please try again. If you have multiple accounts, use Switch account first.");
+    }, 12_000);
+  }
+
+  async function resetSessionBestEffort() {
+    // Clear server cookies + any lingering client auth state.
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // ignore
+    }
+
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // ignore
+    }
+
+    // Extra cleanup for legacy/localStorage-based auth (if it ever existed in older builds).
+    try {
+      const keys: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (typeof k === "string") keys.push(k);
+      }
+      for (const k of keys) {
+        if (/^sb-.*-auth-token$/i.test(k)) localStorage.removeItem(k);
+        if (k === "supabase.auth.token") localStorage.removeItem(k);
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   // If Supabase ever redirects recovery/invite users to "/" (site URL),
   // forward them to /reset-password so they can set a password.
@@ -29,11 +76,103 @@ export function LoginForm() {
     }
   }, []);
 
+  // Cleanup watchdog on unmount.
+  useEffect(() => {
+    return () => clearWatchdog();
+  }, []);
+
+  async function doSignIn(email: string, pwd: string) {
+    // Login with Supabase
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password: pwd,
+    });
+
+    if (authError) {
+      setError("Invalid email or password.");
+      setPassword("");
+      return;
+    }
+
+    // Fetch user role + active flag from database.
+    // IMPORTANT: do NOT use .single() here.
+    // Disabled users may be hidden by RLS, which can cause PostgREST 406 (PGRST116) with .single().
+    const { data: rows, error: dbError } = await supabase
+      .from('users')
+      .select('role, organization_id, is_active')
+      .eq('id', authData.user.id)
+      .limit(1);
+
+    if (dbError) {
+      throw new Error('Failed to fetch user role');
+    }
+
+    const dbUser = Array.isArray(rows) ? rows[0] : null;
+
+    // If the row is not visible, it’s usually because the account is disabled (or not provisioned).
+    if (!dbUser) {
+      await resetSessionBestEffort();
+      throw new Error("Your account is currently disabled. Please contact your administrator if you believe this is a mistake.");
+    }
+
+    // If RLS ever allows reading disabled users, keep this explicit check too.
+    if ((dbUser as { is_active?: boolean | null }).is_active === false) {
+      await resetSessionBestEffort();
+      throw new Error("Your account is currently disabled. Please contact your administrator if you believe this is a mistake.");
+    }
+
+    // Check if there's a redirect URL from the query params
+    const redirectTo = searchParams.get('redirect');
+    
+    // Determine target URL based on role
+    let targetUrl = '/';
+    let orgSlug: string | null = null;
+    if ((dbUser.role === 'organization_admin' || dbUser.role === 'member') && dbUser.organization_id) {
+      try {
+        const { data: orgRow } = await supabase
+          .from('organizations')
+          .select('slug')
+          .eq('id', dbUser.organization_id)
+          .maybeSingle();
+        const raw = (orgRow as { slug?: unknown } | null)?.slug;
+        orgSlug = typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
+      } catch {
+        orgSlug = null;
+      }
+    }
+    
+    if (redirectTo) {
+      targetUrl = redirectTo;
+    } else {
+      switch (dbUser.role) {
+        case 'super_admin':
+          targetUrl = '/admin';
+          break;
+        case 'system_admin':
+          targetUrl = '/system';
+          break;
+        case 'organization_admin':
+        case 'member':
+          targetUrl = dbUser.organization_id ? `/org/${orgSlug ?? dbUser.organization_id}` : '/';
+          break;
+        default:
+          targetUrl = '/';
+      }
+    }
+
+    // Hard redirect:
+    // - Ensures the edge proxy re-evaluates cookies immediately
+    // - Avoids "stuck on Signing in..." if client navigation gets bounced
+    clearWatchdog();
+    window.location.assign(targetUrl);
+  }
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError("");
+    setSwitchPrompt(null);
     setIsLoading(true);
-    let keepLoadingUntilNavigate = false;
+    startWatchdog();
 
     // Autofill fallback: some browsers/password managers fill inputs without firing React onChange,
     // so state can be empty even when the user sees values on screen.
@@ -50,103 +189,35 @@ export function LoginForm() {
     if (!email || !pwd) {
       setError("Please enter your email and password.");
       setIsLoading(false);
+      clearWatchdog();
       return;
     }
 
     try {
-      // Login with Supabase
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password: pwd,
-      });
+      // If a different user is already signed in in this browser, require switching first.
+      // (This avoids confusing mixed-session states and prevents "Signing in..." hangs.)
+      const { data: sessionData } = await supabase.auth.getSession();
+      const existingEmail = (sessionData.session?.user?.email ?? "").trim().toLowerCase() || null;
+      const targetEmail = email.toLowerCase();
 
-      if (authError) {
-        setError("Invalid email or password.");
-        setPassword("");
+      if (existingEmail && existingEmail !== targetEmail) {
+        pendingCredsRef.current = { email, password: pwd };
+        setSwitchPrompt({ currentEmail: existingEmail, targetEmail: email });
+        setIsLoading(false);
+        clearWatchdog();
         return;
       }
 
-      // Fetch user role + active flag from database.
-      // IMPORTANT: do NOT use .single() here.
-      // Disabled users may be hidden by RLS, which can cause PostgREST 406 (PGRST116) with .single().
-      const { data: rows, error: dbError } = await supabase
-        .from('users')
-        .select('role, organization_id, is_active')
-        .eq('id', authData.user.id)
-        .limit(1);
-
-      if (dbError) {
-        throw new Error('Failed to fetch user role');
-      }
-
-      const dbUser = Array.isArray(rows) ? rows[0] : null;
-
-      // If the row is not visible, it’s usually because the account is disabled (or not provisioned).
-      if (!dbUser) {
-        await supabase.auth.signOut();
-        throw new Error("Your account is currently disabled. Please contact your administrator if you believe this is a mistake.");
-      }
-
-      // If RLS ever allows reading disabled users, keep this explicit check too.
-      if ((dbUser as { is_active?: boolean | null }).is_active === false) {
-        await supabase.auth.signOut();
-        throw new Error("Your account is currently disabled. Please contact your administrator if you believe this is a mistake.");
-      }
-
-      // Check if there's a redirect URL from the query params
-      const redirectTo = searchParams.get('redirect');
-      
-      // Determine target URL based on role
-      let targetUrl = '/';
-      let orgSlug: string | null = null;
-      if ((dbUser.role === 'organization_admin' || dbUser.role === 'member') && dbUser.organization_id) {
-        try {
-          const { data: orgRow } = await supabase
-            .from('organizations')
-            .select('slug')
-            .eq('id', dbUser.organization_id)
-            .maybeSingle();
-          const raw = (orgRow as { slug?: unknown } | null)?.slug;
-          orgSlug = typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
-        } catch {
-          orgSlug = null;
-        }
-      }
-      
-      if (redirectTo) {
-        targetUrl = redirectTo;
-      } else {
-        switch (dbUser.role) {
-          case 'super_admin':
-            targetUrl = '/admin';
-            break;
-          case 'system_admin':
-            targetUrl = '/system';
-            break;
-          case 'organization_admin':
-          case 'member':
-            targetUrl = dbUser.organization_id ? `/org/${orgSlug ?? dbUser.organization_id}` : '/';
-            break;
-          default:
-            targetUrl = '/';
-        }
-      }
-
-      // Navigate and refresh to update auth state
-      // Keep the "Signing in..." UI active until navigation swaps screens, to avoid flashes.
-      keepLoadingUntilNavigate = true;
-      router.push(targetUrl);
-      router.refresh();
-      
+      await doSignIn(email, pwd);
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Failed to login";
       setError(errorMessage);
       // Clear password on unexpected errors for security
       setPassword("");
     } finally {
-      if (!keepLoadingUntilNavigate) {
-        setIsLoading(false);
-      }
+      // If we hard-redirected, this component will be replaced. If we stayed here, stop loading.
+      setIsLoading(false);
+      clearWatchdog();
     }
   };
 
@@ -168,6 +239,57 @@ export function LoginForm() {
           Your account is currently <span className="font-medium">disabled</span>. Please contact your administrator if you believe this is a mistake.
         </div>
       )}
+
+      {switchPrompt ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="font-medium">Switch account required</div>
+          <div className="mt-1">
+            You’re currently signed in as <span className="font-medium">{switchPrompt.currentEmail}</span>. To sign in as{" "}
+            <span className="font-medium">{switchPrompt.targetEmail}</span>, click <span className="font-medium">Switch account</span>.
+          </div>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isLoading}
+              onClick={() => {
+                pendingCredsRef.current = null;
+                setSwitchPrompt(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isLoading}
+              onClick={async () => {
+                const creds = pendingCredsRef.current;
+                if (!creds) {
+                  setSwitchPrompt(null);
+                  return;
+                }
+                setError("");
+                setIsLoading(true);
+                startWatchdog();
+                try {
+                  await resetSessionBestEffort();
+                  setSwitchPrompt(null);
+                  pendingCredsRef.current = null;
+                  await doSignIn(creds.email, creds.password);
+                } catch (e) {
+                  const msg = e instanceof Error ? e.message : "Failed to switch account";
+                  setError(msg);
+                } finally {
+                  setIsLoading(false);
+                  clearWatchdog();
+                }
+              }}
+            >
+              Switch account
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       {/* Error Message */}
       {error && (
@@ -226,7 +348,7 @@ export function LoginForm() {
         <Button 
           type="submit" 
           className="w-full h-11"
-          disabled={isLoading}
+          disabled={isLoading || !!switchPrompt}
         >
           {isLoading ? "Signing in..." : "Sign In"}
         </Button>

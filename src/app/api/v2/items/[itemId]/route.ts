@@ -4,6 +4,8 @@ import { apiError, apiOk } from "@/lib/api/response";
 import { updateTopicItemSchema, validateSchema } from "@/lib/validations/schemas";
 import { sanitizeRichHtml } from "@/lib/courses/v2";
 
+export const runtime = "nodejs";
+
 export async function PATCH(request: NextRequest, context: { params: Promise<{ itemId: string }> }) {
   const { itemId } = await context.params;
   const { user: caller, error } = await getServerUser();

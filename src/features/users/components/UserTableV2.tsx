@@ -26,6 +26,7 @@ import type { Organization } from "@/features/organizations";
 import { useUsers } from "../hooks/useUsers";
 import { useOrganizations } from "@/features/organizations";
 import { roleLabel } from "@/lib/utils/roleLabel";
+import { ACCESS_DURATION_KEYS, accessKeyLabel, type AccessDurationKey, isAccessDurationKey } from "@/lib/courseAssignments/access";
 
 import { Button } from "@/components/core/button";
 import { Input } from "@/components/ui/input";
@@ -264,6 +265,54 @@ function areStringSetsEqual(a: Set<string>, b: Set<string>): boolean {
   return true;
 }
 
+type CourseAssignmentInfo = {
+  course_id: string;
+  access: AccessDurationKey;
+  access_expires_at: string | null;
+  access_duration_key: string | null;
+  assigned_at: string | null;
+};
+
+function formatShortDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+}
+
+function deriveAccessKeyFromAssignment(row: {
+  access_duration_key: string | null;
+  access_expires_at: string | null;
+  assigned_at: string | null;
+}): AccessDurationKey {
+  if (isAccessDurationKey(row.access_duration_key)) return row.access_duration_key;
+  if (!row.access_expires_at) return "unlimited";
+
+  // Best-effort inference for legacy rows where only expires_at exists.
+  const assignedMs = row.assigned_at ? new Date(row.assigned_at).getTime() : Number.NaN;
+  const expiresMs = new Date(row.access_expires_at).getTime();
+  if (Number.isFinite(assignedMs) && Number.isFinite(expiresMs) && expiresMs > assignedMs) {
+    const diffDays = (expiresMs - assignedMs) / (1000 * 60 * 60 * 24);
+    if (diffDays <= 8) return "1w";
+    if (diffDays <= 40) return "1m";
+    if (diffDays <= 110) return "3m";
+  }
+
+  return "1m";
+}
+
+function areCourseAccessMapsEqualForSet(
+  ids: Set<string>,
+  a: Record<string, AccessDurationKey>,
+  b: Record<string, AccessDurationKey>
+): boolean {
+  for (const id of ids) {
+    const av = a[id] ?? "unlimited";
+    const bv = b[id] ?? "unlimited";
+    if (av !== bv) return false;
+  }
+  return true;
+}
+
 export function UserTableV2({
   title = "All Users",
   organizationId,
@@ -364,6 +413,7 @@ export function UserTableV2({
   const [isBulkApplying, setIsBulkApplying] = useState(false);
   const [bulkTargetRole, setBulkTargetRole] = useState<Role | "">("");
   const [bulkCourseId, setBulkCourseId] = useState<string>("");
+  const [bulkCourseAccess, setBulkCourseAccess] = useState<AccessDurationKey>("unlimited");
   const [assignableCourses, setAssignableCourses] = useState<AssignableCourse[]>([]);
   const [isAssignableCoursesLoading, setIsAssignableCoursesLoading] = useState(false);
 
@@ -375,6 +425,7 @@ export function UserTableV2({
     if (!isOrgAdmin) {
       setAssignableCourses([]);
       setBulkCourseId("");
+      setBulkCourseAccess("unlimited");
       return;
     }
 
@@ -668,15 +719,45 @@ export function UserTableV2({
   const loadUserCourseAssignments = useCallback(
     async (userId: string) => {
       const res = await getUserCourseAssignments(userId);
-      return { courseIds: Array.isArray(res.course_ids) ? res.course_ids : [] };
+      const raw =
+        Array.isArray(res.assignments) && res.assignments.length
+          ? res.assignments
+          : (Array.isArray(res.course_ids) ? res.course_ids : []).map((course_id) => ({
+              course_id,
+              access_expires_at: null,
+              access_duration_key: null,
+              assigned_at: null,
+            }));
+
+      const assignments: CourseAssignmentInfo[] = raw
+        .map((r) => {
+          const course_id = typeof (r as { course_id?: unknown }).course_id === "string" ? String((r as { course_id: string }).course_id) : null;
+          if (!course_id) return null;
+          const access_expires_at =
+            typeof (r as { access_expires_at?: unknown }).access_expires_at === "string"
+              ? String((r as { access_expires_at: string }).access_expires_at)
+              : null;
+          const access_duration_key =
+            typeof (r as { access_duration_key?: unknown }).access_duration_key === "string"
+              ? String((r as { access_duration_key: string }).access_duration_key)
+              : null;
+          const assigned_at =
+            typeof (r as { assigned_at?: unknown }).assigned_at === "string" ? String((r as { assigned_at: string }).assigned_at) : null;
+
+          const access = deriveAccessKeyFromAssignment({ access_duration_key, access_expires_at, assigned_at });
+          return { course_id, access, access_expires_at, access_duration_key, assigned_at };
+        })
+        .filter((v): v is CourseAssignmentInfo => !!v);
+
+      return { assignments };
     },
     [getUserCourseAssignments]
   );
 
   const saveUserCourseAssignments = useCallback(
-    async (userId: string, courseIds: string[]) => {
-      const res = await replaceUserCourseAssignments(userId, courseIds);
-      return { message: res.message };
+    async (userId: string, assignments: Array<{ course_id: string; access: AccessDurationKey }>) => {
+      const res = await replaceUserCourseAssignments(userId, { assignments });
+      return { message: res.message, assignments: Array.isArray(res.assignments) ? res.assignments : undefined };
     },
     [replaceUserCourseAssignments]
   );
@@ -717,6 +798,7 @@ export function UserTableV2({
         user_ids: ids,
         course_id: bulkCourseId,
         action,
+        ...(action === "assign" ? { access: bulkCourseAccess } : {}),
       });
 
       const successCount = res.success_count ?? 0;
@@ -944,6 +1026,7 @@ export function UserTableV2({
                     setBulkTargetOrgId("");
                     setBulkTargetRole("");
                     setBulkCourseId("");
+                    setBulkCourseAccess("unlimited");
                   }}
                   disabled={isBulkApplying}
                   className="h-9 hover:bg-primary hover:text-white hover:border-primary"
@@ -1015,13 +1098,13 @@ export function UserTableV2({
                       </Button>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:col-span-2">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-4 sm:col-span-2">
                       <FilterSelect
                         ariaLabel="Bulk course assignment"
                         value={(bulkCourseId || "") as string}
                         onChange={(v) => setBulkCourseId(v)}
                         disabled={isBulkApplying || isAssignableCoursesLoading}
-                        className="w-full sm:col-span-1"
+                        className="w-full"
                         options={[
                           { value: "", label: isAssignableCoursesLoading ? "Loading courses…" : "Select course…" },
                           ...assignableCourses.map((c) => ({
@@ -1029,6 +1112,14 @@ export function UserTableV2({
                             label: `${(c.title ?? "").trim() || "(untitled)"}${c.is_published ? "" : " (draft)"}`,
                           })),
                         ]}
+                      />
+                      <FilterSelect
+                        ariaLabel="Bulk course access duration"
+                        value={bulkCourseAccess}
+                        onChange={(v) => setBulkCourseAccess(v as AccessDurationKey)}
+                        disabled={isBulkApplying}
+                        className="w-full"
+                        options={ACCESS_DURATION_KEYS.map((k) => ({ value: k, label: accessKeyLabel(k) }))}
                       />
                       <Button
                         className="w-full"
@@ -1123,6 +1214,7 @@ export function UserTableV2({
                     setBulkTargetOrgId("");
                     setBulkTargetRole("");
                     setBulkCourseId("");
+                    setBulkCourseAccess("unlimited");
                   }}
                   disabled={isBulkApplying}
                   className="hover:bg-primary hover:text-white hover:border-primary"
@@ -1190,6 +1282,14 @@ export function UserTableV2({
                           label: `${(c.title ?? "").trim() || "(untitled)"}${c.is_published ? "" : " (draft)"}`,
                         })),
                       ]}
+                    />
+                    <FilterSelect
+                      ariaLabel="Bulk course access duration"
+                      value={bulkCourseAccess}
+                      onChange={(v) => setBulkCourseAccess(v as AccessDurationKey)}
+                      disabled={isBulkApplying}
+                      className="min-w-[180px]"
+                      options={ACCESS_DURATION_KEYS.map((k) => ({ value: k, label: accessKeyLabel(k) }))}
                     />
                     <Button
                       variant="outline"
@@ -1643,8 +1743,11 @@ function UserDetailsDrawer(props: {
   onPasswordSetupLink: (userId: string) => Promise<{ message?: string }>;
   assignableCourses: AssignableCourse[];
   assignableCoursesLoading: boolean;
-  onLoadCourseAssignments: (userId: string) => Promise<{ courseIds: string[] }>;
-  onSaveCourseAssignments: (userId: string, courseIds: string[]) => Promise<{ message?: string }>;
+  onLoadCourseAssignments: (userId: string) => Promise<{ assignments: CourseAssignmentInfo[] }>;
+  onSaveCourseAssignments: (
+    userId: string,
+    assignments: Array<{ course_id: string; access: AccessDurationKey }>
+  ) => Promise<{ message?: string; assignments?: Array<{ course_id: string; access_expires_at: string | null; access_duration_key: string | null }> }>;
 }) {
   const {
     user,
@@ -1668,12 +1771,18 @@ function UserDetailsDrawer(props: {
   const [avatarError, setAvatarError] = useState(false);
   const [baselineCourseIds, setBaselineCourseIds] = useState<Set<string>>(new Set());
   const [selectedCourseIds, setSelectedCourseIds] = useState<Set<string>>(new Set());
+  const [baselineCourseAccessById, setBaselineCourseAccessById] = useState<Record<string, AccessDurationKey>>({});
+  const [selectedCourseAccessById, setSelectedCourseAccessById] = useState<Record<string, AccessDurationKey>>({});
+  const [baselineCourseExpiresAtById, setBaselineCourseExpiresAtById] = useState<Record<string, string | null>>({});
 
   useEffect(() => setSelectedRole(user.role), [user.role]);
   useEffect(() => setSelectedOrgId(user.organization_id ?? ""), [user.organization_id]);
   useEffect(() => {
     setBaselineCourseIds(new Set());
     setSelectedCourseIds(new Set());
+    setBaselineCourseAccessById({});
+    setSelectedCourseAccessById({});
+    setBaselineCourseExpiresAtById({});
   }, [user.id]);
 
   const canEdit = canEditRole(callerRole, user.role);
@@ -1701,6 +1810,9 @@ function UserDetailsDrawer(props: {
     if (!canManageCourseAccess || !open) {
       setBaselineCourseIds(new Set());
       setSelectedCourseIds(new Set());
+      setBaselineCourseAccessById({});
+      setSelectedCourseAccessById({});
+      setBaselineCourseExpiresAtById({});
       return;
     }
     let cancelled = false;
@@ -1709,9 +1821,19 @@ function UserDetailsDrawer(props: {
       try {
         const res = await onLoadCourseAssignments(user.id);
         if (cancelled) return;
-        const ids = new Set(Array.isArray(res.courseIds) ? res.courseIds : []);
+        const list = Array.isArray(res.assignments) ? res.assignments : [];
+        const ids = new Set(list.map((a) => a.course_id));
+        const accessById: Record<string, AccessDurationKey> = {};
+        const expiresById: Record<string, string | null> = {};
+        for (const a of list) {
+          accessById[a.course_id] = a.access;
+          expiresById[a.course_id] = a.access_expires_at ?? null;
+        }
         setBaselineCourseIds(ids);
         setSelectedCourseIds(new Set(ids));
+        setBaselineCourseAccessById(accessById);
+        setSelectedCourseAccessById({ ...accessById });
+        setBaselineCourseExpiresAtById(expiresById);
       } catch (e) {
         if (cancelled) return;
         toast.error(e instanceof Error ? e.message : "Failed to load course assignments");
@@ -1735,7 +1857,9 @@ function UserDetailsDrawer(props: {
   const statusText = !isEnabled ? "Disabled" : isPending ? "Pending" : "Active";
   const statusTone = !isEnabled ? "text-gray-700" : isPending ? "text-amber-800" : "text-emerald-700";
   const orgCreated = org?.created_at ?? null;
-  const courseAssignmentsDirty = !areStringSetsEqual(selectedCourseIds, baselineCourseIds);
+  const courseAssignmentsDirty =
+    !areStringSetsEqual(selectedCourseIds, baselineCourseIds) ||
+    !areCourseAccessMapsEqualForSet(selectedCourseIds, selectedCourseAccessById, baselineCourseAccessById);
 
   return (
     <div
@@ -2012,14 +2136,57 @@ function UserDetailsDrawer(props: {
                                         else next.delete(cid);
                                         return next;
                                       });
+                                      setSelectedCourseAccessById((prev) => {
+                                        const next = { ...prev };
+                                        if (nextChecked) {
+                                          next[cid] = prev[cid] ?? baselineCourseAccessById[cid] ?? "unlimited";
+                                        } else {
+                                          delete next[cid];
+                                        }
+                                        return next;
+                                      });
                                     }}
                                   />
                                   <span className="truncate">{title}</span>
-                                  {course.is_published ? null : (
-                                    <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
-                                      Draft
-                                    </span>
-                                  )}
+                                  <span className="ml-auto flex items-center gap-2">
+                                    {checked ? (
+                                      <>
+                                        {baselineCourseExpiresAtById[cid] ? (
+                                          <span className="hidden sm:inline text-[10px] text-muted-foreground">
+                                            {(() => {
+                                              const iso = baselineCourseExpiresAtById[cid];
+                                              if (!iso) return "";
+                                              const ms = new Date(iso).getTime();
+                                              const expired = Number.isFinite(ms) ? ms <= Date.now() : false;
+                                              return `${expired ? "Expired" : "Expires"} ${formatShortDate(iso)}`;
+                                            })()}
+                                          </span>
+                                        ) : (
+                                          <span className="hidden sm:inline text-[10px] text-muted-foreground">Unlimited</span>
+                                        )}
+                                        <select
+                                          value={selectedCourseAccessById[cid] ?? "unlimited"}
+                                          onClick={(e) => e.stopPropagation()}
+                                          onChange={(e) => {
+                                            const v = e.target.value as AccessDurationKey;
+                                            setSelectedCourseAccessById((prev) => ({ ...prev, [cid]: v }));
+                                          }}
+                                          className="h-8 rounded-md border bg-background px-2 text-xs hover:cursor-pointer"
+                                        >
+                                          {ACCESS_DURATION_KEYS.map((k) => (
+                                            <option key={k} value={k}>
+                                              {accessKeyLabel(k)}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </>
+                                    ) : null}
+                                    {course.is_published ? null : (
+                                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
+                                        Draft
+                                      </span>
+                                    )}
+                                  </span>
                                 </label>
                               );
                             })}
@@ -2033,9 +2200,24 @@ function UserDetailsDrawer(props: {
                               setIsSavingCourses(true);
                               const t = toast.loading("Saving course access…");
                               try {
-                                const nextIds = Array.from(selectedCourseIds);
-                                const res = await onSaveCourseAssignments(user.id, nextIds);
-                                setBaselineCourseIds(new Set(nextIds));
+                                const ids = Array.from(selectedCourseIds).sort();
+                                const assignments = ids.map((course_id) => ({
+                                  course_id,
+                                  access: selectedCourseAccessById[course_id] ?? "unlimited",
+                                }));
+                                const res = await onSaveCourseAssignments(user.id, assignments);
+                                const nextIds = new Set(ids);
+                                const nextAccess = { ...selectedCourseAccessById };
+                                setBaselineCourseIds(nextIds);
+                                setBaselineCourseAccessById(nextAccess);
+                                setBaselineCourseExpiresAtById(() => {
+                                  const next: Record<string, string | null> = {};
+                                  for (const a of assignments) {
+                                    const row = res.assignments?.find((x) => x.course_id === a.course_id) ?? null;
+                                    next[a.course_id] = row?.access_expires_at ?? null;
+                                  }
+                                  return next;
+                                });
                                 toast.success(res.message || "Course access updated.", { id: t });
                               } catch (e) {
                                 toast.error(e instanceof Error ? e.message : "Failed to save course access", { id: t });
@@ -2049,7 +2231,10 @@ function UserDetailsDrawer(props: {
                           <Button
                             variant="ghost"
                             disabled={isSavingCourses || !courseAssignmentsDirty}
-                            onClick={() => setSelectedCourseIds(new Set(baselineCourseIds))}
+                            onClick={() => {
+                              setSelectedCourseIds(new Set(baselineCourseIds));
+                              setSelectedCourseAccessById({ ...baselineCourseAccessById });
+                            }}
                           >
                             Reset
                           </Button>
@@ -2072,6 +2257,7 @@ function UserDetailsDrawer(props: {
                       setSelectedRole(user.role);
                       setSelectedOrgId(user.organization_id ?? "");
                       setSelectedCourseIds(new Set(baselineCourseIds));
+                      setSelectedCourseAccessById({ ...baselineCourseAccessById });
                     }}
                     className="w-full min-h-[40px] border border-primary bg-primary text-white hover:bg-white hover:text-foreground hover:border-primary"
                   >
@@ -2404,8 +2590,11 @@ function MobileUserCard(props: {
   onPasswordSetupLink: (userId: string) => Promise<{ message?: string }>;
   assignableCourses: AssignableCourse[];
   assignableCoursesLoading: boolean;
-  onLoadCourseAssignments: (userId: string) => Promise<{ courseIds: string[] }>;
-  onSaveCourseAssignments: (userId: string, courseIds: string[]) => Promise<{ message?: string }>;
+  onLoadCourseAssignments: (userId: string) => Promise<{ assignments: CourseAssignmentInfo[] }>;
+  onSaveCourseAssignments: (
+    userId: string,
+    assignments: Array<{ course_id: string; access: AccessDurationKey }>
+  ) => Promise<{ message?: string; assignments?: Array<{ course_id: string; access_expires_at: string | null; access_duration_key: string | null }> }>;
 }) {
   const {
     user,
@@ -2421,6 +2610,9 @@ function MobileUserCard(props: {
   const [selectedOrgId, setSelectedOrgId] = useState<string>(user.organization_id ?? "");
   const [baselineCourseIds, setBaselineCourseIds] = useState<Set<string>>(new Set());
   const [selectedCourseIds, setSelectedCourseIds] = useState<Set<string>>(new Set());
+  const [baselineCourseAccessById, setBaselineCourseAccessById] = useState<Record<string, AccessDurationKey>>({});
+  const [selectedCourseAccessById, setSelectedCourseAccessById] = useState<Record<string, AccessDurationKey>>({});
+  const [baselineCourseExpiresAtById, setBaselineCourseExpiresAtById] = useState<Record<string, string | null>>({});
   const [loadingCourses, setLoadingCourses] = useState(false);
   const [savingCourses, setSavingCourses] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2432,6 +2624,9 @@ function MobileUserCard(props: {
   useEffect(() => {
     setBaselineCourseIds(new Set());
     setSelectedCourseIds(new Set());
+    setBaselineCourseAccessById({});
+    setSelectedCourseAccessById({});
+    setBaselineCourseExpiresAtById({});
   }, [user.id]);
 
   const isEnabled = user.is_active !== false;
@@ -2462,12 +2657,17 @@ function MobileUserCard(props: {
   const statusTone = !isEnabled ? "text-gray-100" : isPending ? "text-amber-200" : "text-emerald-200";
   const StatusIcon = !isEnabled ? X : isPending ? Send : CheckCheck;
   const open = props.open;
-  const courseAssignmentsDirty = !areStringSetsEqual(selectedCourseIds, baselineCourseIds);
+  const courseAssignmentsDirty =
+    !areStringSetsEqual(selectedCourseIds, baselineCourseIds) ||
+    !areCourseAccessMapsEqualForSet(selectedCourseIds, selectedCourseAccessById, baselineCourseAccessById);
 
   useEffect(() => {
     if (!canManageCourseAccess || !open) {
       setBaselineCourseIds(new Set());
       setSelectedCourseIds(new Set());
+      setBaselineCourseAccessById({});
+      setSelectedCourseAccessById({});
+      setBaselineCourseExpiresAtById({});
       return;
     }
     let cancelled = false;
@@ -2476,9 +2676,19 @@ function MobileUserCard(props: {
       try {
         const res = await onLoadCourseAssignments(user.id);
         if (cancelled) return;
-        const ids = new Set(Array.isArray(res.courseIds) ? res.courseIds : []);
+        const list = Array.isArray(res.assignments) ? res.assignments : [];
+        const ids = new Set(list.map((a) => a.course_id));
+        const accessById: Record<string, AccessDurationKey> = {};
+        const expiresById: Record<string, string | null> = {};
+        for (const a of list) {
+          accessById[a.course_id] = a.access;
+          expiresById[a.course_id] = a.access_expires_at ?? null;
+        }
         setBaselineCourseIds(ids);
         setSelectedCourseIds(new Set(ids));
+        setBaselineCourseAccessById(accessById);
+        setSelectedCourseAccessById({ ...accessById });
+        setBaselineCourseExpiresAtById(expiresById);
       } catch (e) {
         if (cancelled) return;
         toast.error(e instanceof Error ? e.message : "Failed to load course assignments");
@@ -2752,14 +2962,57 @@ function MobileUserCard(props: {
                                           else next.delete(cid);
                                           return next;
                                         });
+                                        setSelectedCourseAccessById((prev) => {
+                                          const next = { ...prev };
+                                          if (nextChecked) {
+                                            next[cid] = prev[cid] ?? baselineCourseAccessById[cid] ?? "unlimited";
+                                          } else {
+                                            delete next[cid];
+                                          }
+                                          return next;
+                                        });
                                       }}
                                     />
                                     <span className={`truncate ${rowText}`}>{title}</span>
-                                    {course.is_published ? null : (
-                                      <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
-                                        Draft
-                                      </span>
-                                    )}
+                                    <span className="ml-auto flex items-center gap-2">
+                                      {checked ? (
+                                        <>
+                                          {baselineCourseExpiresAtById[cid] ? (
+                                            <span className={`hidden sm:inline text-[10px] ${rowMuted}`}>
+                                              {(() => {
+                                                const iso = baselineCourseExpiresAtById[cid];
+                                                if (!iso) return "";
+                                                const ms = new Date(iso).getTime();
+                                                const expired = Number.isFinite(ms) ? ms <= Date.now() : false;
+                                                return `${expired ? "Expired" : "Expires"} ${formatShortDate(iso)}`;
+                                              })()}
+                                            </span>
+                                          ) : (
+                                            <span className={`hidden sm:inline text-[10px] ${rowMuted}`}>Unlimited</span>
+                                          )}
+                                          <select
+                                            value={selectedCourseAccessById[cid] ?? "unlimited"}
+                                            onClick={(e) => e.stopPropagation()}
+                                            onChange={(e) => {
+                                              const v = e.target.value as AccessDurationKey;
+                                              setSelectedCourseAccessById((prev) => ({ ...prev, [cid]: v }));
+                                            }}
+                                            className="h-8 rounded-md border bg-background px-2 text-xs text-foreground hover:cursor-pointer"
+                                          >
+                                            {ACCESS_DURATION_KEYS.map((k) => (
+                                              <option key={k} value={k}>
+                                                {accessKeyLabel(k)}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </>
+                                      ) : null}
+                                      {course.is_published ? null : (
+                                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
+                                          Draft
+                                        </span>
+                                      )}
+                                    </span>
                                   </label>
                                 );
                               })}
@@ -2774,9 +3027,24 @@ function MobileUserCard(props: {
                                 setSavingCourses(true);
                                 const t = toast.loading("Saving course access…");
                                 try {
-                                  const nextIds = Array.from(selectedCourseIds);
-                                  const res = await onSaveCourseAssignments(user.id, nextIds);
-                                  setBaselineCourseIds(new Set(nextIds));
+                                  const ids = Array.from(selectedCourseIds).sort();
+                                  const assignments = ids.map((course_id) => ({
+                                    course_id,
+                                    access: selectedCourseAccessById[course_id] ?? "unlimited",
+                                  }));
+                                  const res = await onSaveCourseAssignments(user.id, assignments);
+                                  const nextIds = new Set(ids);
+                                  const nextAccess = { ...selectedCourseAccessById };
+                                  setBaselineCourseIds(nextIds);
+                                  setBaselineCourseAccessById(nextAccess);
+                                  setBaselineCourseExpiresAtById(() => {
+                                    const next: Record<string, string | null> = {};
+                                    for (const a of assignments) {
+                                      const row = res.assignments?.find((x) => x.course_id === a.course_id) ?? null;
+                                      next[a.course_id] = row?.access_expires_at ?? null;
+                                    }
+                                    return next;
+                                  });
                                   toast.success(res.message || "Course access updated.", { id: t });
                                 } catch (e) {
                                   toast.error(e instanceof Error ? e.message : "Failed to save course access", { id: t });
@@ -2790,7 +3058,10 @@ function MobileUserCard(props: {
                             <Button
                               variant="ghost"
                               disabled={savingCourses || !courseAssignmentsDirty}
-                              onClick={() => setSelectedCourseIds(new Set(baselineCourseIds))}
+                              onClick={() => {
+                                setSelectedCourseIds(new Set(baselineCourseIds));
+                                setSelectedCourseAccessById({ ...baselineCourseAccessById });
+                              }}
                               className={selected ? "text-white hover:bg-white/10 hover:text-white" : ""}
                             >
                               Reset
@@ -2812,6 +3083,7 @@ function MobileUserCard(props: {
                         setSelectedRole(user.role);
                         setSelectedOrgId(user.organization_id ?? "");
                         setSelectedCourseIds(new Set(baselineCourseIds));
+                        setSelectedCourseAccessById({ ...baselineCourseAccessById });
                       }}
                       className="w-full min-h-[40px] border border-primary bg-primary text-white hover:bg-white hover:text-foreground hover:border-primary"
                     >

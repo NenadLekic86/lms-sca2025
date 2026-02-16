@@ -17,7 +17,7 @@ export function DashboardLayout({
         <DashboardSidebar />
 
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-          <main className={`flex-1 overflow-auto ${centered ? 'flex items-center justify-center' : 'p-6'}`}>
+          <main className={`flex-1 overflow-auto overscroll-contain ${centered ? 'flex items-center justify-center' : 'p-6'}`}>
             {children}
           </main>
 

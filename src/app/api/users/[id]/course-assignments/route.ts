@@ -3,12 +3,26 @@ import { z } from "zod";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { apiError, apiOk, readJsonBody } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
+import { computeAccessExpiresAt, type AccessDurationKey, isAccessDurationKey } from "@/lib/courseAssignments/access";
 
 export const runtime = "nodejs";
 
-const replaceAssignmentsSchema = z.object({
-  course_ids: z.array(z.string().uuid("Invalid course ID")).max(500),
-});
+const accessKeySchema = z.enum(["unlimited", "3m", "1m", "1w"]);
+const replaceAssignmentsSchema = z.union([
+  z.object({
+    course_ids: z.array(z.string().uuid("Invalid course ID")).max(500),
+  }),
+  z.object({
+    assignments: z
+      .array(
+        z.object({
+          course_id: z.string().uuid("Invalid course ID"),
+          access: accessKeySchema.optional(),
+        })
+      )
+      .max(500),
+  }),
+]);
 
 type TargetUserRow = {
   id: string;
@@ -19,6 +33,9 @@ type TargetUserRow = {
 
 type AssignmentRow = {
   course_id: string | null;
+  access_expires_at?: string | null;
+  access_duration_key?: string | null;
+  assigned_at?: string | null;
 };
 
 type ValidCourseRow = {
@@ -87,7 +104,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
 
   const { data, error: assignmentsError } = await admin
     .from("course_member_assignments")
-    .select("course_id")
+    .select("course_id, access_expires_at, access_duration_key, assigned_at")
     .eq("organization_id", caller.organization_id)
     .eq("user_id", userId);
 
@@ -104,9 +121,21 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     return apiError("INTERNAL", "Failed to load course assignments.", { status: 500 });
   }
 
-  const assignedCourseIds = ((Array.isArray(data) ? data : []) as AssignmentRow[])
-    .map((r) => r.course_id)
-    .filter((v): v is string => typeof v === "string");
+  const rows = (Array.isArray(data) ? data : []) as AssignmentRow[];
+  const assignments = rows
+    .map((r) => {
+      const course_id = typeof r.course_id === "string" ? r.course_id : null;
+      if (!course_id) return null;
+      return {
+        course_id,
+        access_expires_at: typeof r.access_expires_at === "string" ? r.access_expires_at : null,
+        access_duration_key: typeof r.access_duration_key === "string" ? r.access_duration_key : null,
+        assigned_at: typeof r.assigned_at === "string" ? r.assigned_at : null,
+      };
+    })
+    .filter((v): v is { course_id: string; access_expires_at: string | null; access_duration_key: string | null; assigned_at: string | null } => !!v);
+
+  const assignedCourseIds = assignments.map((a) => a.course_id);
 
   await logApiEvent({
     request,
@@ -116,7 +145,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     publicMessage: "Course assignments loaded.",
     details: { user_id: userId, count: assignedCourseIds.length },
   });
-  return apiOk({ user_id: userId, course_ids: assignedCourseIds }, { status: 200 });
+  // Keep `course_ids` for backward compatibility; newer UI should use `assignments`.
+  return apiOk({ user_id: userId, course_ids: assignedCourseIds, assignments }, { status: 200 });
 }
 
 export async function PUT(request: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -148,7 +178,21 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ id:
     return apiError("VALIDATION_ERROR", msg, { status: 400 });
   }
 
-  const desiredCourseIds = dedupeCourseIds(parsed.data.course_ids);
+  const desiredAssignmentsRaw: Array<{ course_id: string; access: AccessDurationKey }> =
+    "assignments" in parsed.data
+      ? (parsed.data.assignments ?? [])
+          .map((a) => {
+            const course_id = a.course_id;
+            const keyRaw = a.access;
+            const key: AccessDurationKey = isAccessDurationKey(keyRaw) ? keyRaw : "unlimited";
+            return { course_id, access: key };
+          })
+      : dedupeCourseIds(parsed.data.course_ids).map((course_id) => ({ course_id, access: "unlimited" as const }));
+
+  const desiredAssignments = Array.from(
+    new Map(desiredAssignmentsRaw.map((a) => [a.course_id, a])).values()
+  );
+  const desiredCourseIds = desiredAssignments.map((a) => a.course_id);
   const admin = createAdminSupabaseClient();
 
   const target = await loadTargetUser(admin, userId);
@@ -227,7 +271,7 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ id:
 
   const { data: existingRows, error: existingError } = await admin
     .from("course_member_assignments")
-    .select("course_id")
+    .select("course_id, access_duration_key, access_expires_at, assigned_at")
     .eq("organization_id", caller.organization_id)
     .eq("user_id", userId);
 
@@ -244,21 +288,45 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ id:
     return apiError("INTERNAL", "Failed to load existing assignments.", { status: 500 });
   }
 
-  const existingCourseIds = ((Array.isArray(existingRows) ? existingRows : []) as AssignmentRow[])
-    .map((r) => r.course_id)
-    .filter((v): v is string => typeof v === "string");
+  const existingList = (Array.isArray(existingRows) ? existingRows : []) as AssignmentRow[];
+  const existingCourseIds = existingList.map((r) => r.course_id).filter((v): v is string => typeof v === "string");
+  const existingAccessByCourseId = new Map<string, AccessDurationKey>();
+  const existingMetaByCourseId = new Map<string, { access_expires_at: string | null; access_duration_key: string | null }>();
+  for (const r of existingList) {
+    const cid = typeof r.course_id === "string" ? r.course_id : null;
+    if (!cid) continue;
+    const key = typeof r.access_duration_key === "string" ? r.access_duration_key : null;
+    if (isAccessDurationKey(key)) {
+      existingAccessByCourseId.set(cid, key);
+    } else {
+      existingAccessByCourseId.set(cid, r.access_expires_at ? "1m" : "unlimited");
+    }
+    existingMetaByCourseId.set(cid, {
+      access_expires_at: typeof r.access_expires_at === "string" ? r.access_expires_at : null,
+      access_duration_key: typeof r.access_duration_key === "string" ? r.access_duration_key : null,
+    });
+  }
 
   const existingSet = new Set(existingCourseIds);
   const desiredSet = new Set(desiredCourseIds);
   const toAdd = desiredCourseIds.filter((id) => !existingSet.has(id));
   const toRemove = existingCourseIds.filter((id) => !desiredSet.has(id));
+  const now = new Date();
 
-  if (toAdd.length > 0) {
-    const rows = toAdd.map((courseId) => ({
+  const toUpsertAssignments = desiredAssignments.filter((a) => {
+    const existingKey = existingAccessByCourseId.get(a.course_id);
+    return !existingSet.has(a.course_id) || existingKey !== a.access;
+  });
+
+  if (toUpsertAssignments.length > 0) {
+    const rows = toUpsertAssignments.map((a) => ({
       organization_id: caller.organization_id,
-      course_id: courseId,
+      course_id: a.course_id,
       user_id: userId,
       assigned_by: caller.id,
+      assigned_at: now.toISOString(),
+      access_duration_key: a.access === "unlimited" ? null : a.access,
+      access_expires_at: computeAccessExpiresAt(a.access, now),
     }));
     const { error: addError } = await admin
       .from("course_member_assignments")
@@ -330,6 +398,19 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ id:
     {
       user_id: userId,
       course_ids: desiredCourseIds,
+      assignments: desiredAssignments.map((a) => ({
+        course_id: a.course_id,
+        access_duration_key: (() => {
+          const didUpsert = toUpsertAssignments.some((x) => x.course_id === a.course_id);
+          if (didUpsert) return a.access === "unlimited" ? null : a.access;
+          return existingMetaByCourseId.get(a.course_id)?.access_duration_key ?? null;
+        })(),
+        access_expires_at: (() => {
+          const didUpsert = toUpsertAssignments.some((x) => x.course_id === a.course_id);
+          if (didUpsert) return computeAccessExpiresAt(a.access, now);
+          return existingMetaByCourseId.get(a.course_id)?.access_expires_at ?? null;
+        })(),
+      })),
       added_count: toAdd.length,
       removed_count: toRemove.length,
     },

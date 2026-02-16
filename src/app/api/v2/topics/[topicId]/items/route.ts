@@ -4,6 +4,8 @@ import { apiError, apiOk } from "@/lib/api/response";
 import { createTopicItemSchema, validateSchema } from "@/lib/validations/schemas";
 import { sanitizeRichHtml } from "@/lib/courses/v2";
 
+export const runtime = "nodejs";
+
 export async function POST(request: NextRequest, context: { params: Promise<{ topicId: string }> }) {
   const { topicId } = await context.params;
   const { user: caller, error } = await getServerUser();

@@ -131,6 +131,7 @@ export const courseDifficultySchema = z.enum(["all_levels", "beginner", "interme
 export const courseStatusSchema = z.enum(["draft", "published"]);
 export const introVideoProviderSchema = z.enum(["html5", "youtube", "vimeo"]);
 export const courseItemTypeSchema = z.enum(["lesson", "quiz"]);
+export const accessDurationKeySchema = z.enum(["unlimited", "3m", "1m", "1w"]);
 
 export const createCourseV2Schema = z.object({
   title: courseTitleSchema,
@@ -159,6 +160,8 @@ export const patchCourseV2Schema = z.object({
 
 export const setCourseMembersSchema = z.object({
   member_ids: z.array(z.string().uuid("Invalid member ID")).max(500, "Too many members selected"),
+  default_access: accessDurationKeySchema.optional(),
+  member_access: z.record(z.string().uuid("Invalid member ID"), accessDurationKeySchema).optional(),
 });
 
 export const createTopicSchema = z.object({

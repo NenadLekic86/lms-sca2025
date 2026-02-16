@@ -7,6 +7,8 @@ import { ensureUniqueCourseSlug } from "@/lib/courses/v2";
 
 type CreatedCourse = { id: string; slug: string; status: "draft" | "published" };
 
+export const runtime = "nodejs";
+
 export async function POST(request: NextRequest) {
   const { user: caller, error } = await getServerUser();
   if (error || !caller) {

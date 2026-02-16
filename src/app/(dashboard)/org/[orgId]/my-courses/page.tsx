@@ -20,6 +20,11 @@ type CourseRow = {
   created_at?: string | null;
 };
 
+type CourseAccessRow = {
+  course_id: string | null;
+  access_expires_at: string | null;
+};
+
 function pickCoverGradient(seed: string) {
   const gradients = [
     "bg-gradient-to-br from-indigo-500 via-purple-500 to-fuchsia-500",
@@ -35,6 +40,26 @@ function pickCoverGradient(seed: string) {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
   return gradients[hash % gradients.length];
+}
+
+function formatShortDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+}
+
+function accessPill(expiresAtIso: string | null): { label: string; className: string } {
+  if (!expiresAtIso) return { label: "Unlimited", className: "bg-slate-100 text-slate-800" };
+  const ms = new Date(expiresAtIso).getTime();
+  if (!Number.isFinite(ms)) return { label: "Expires —", className: "bg-slate-100 text-slate-800" };
+
+  const diffMs = ms - Date.now();
+  if (diffMs <= 0) return { label: "Expired", className: "bg-red-100 text-red-800" };
+
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays <= 1) return { label: "Less than 1 day left", className: "bg-amber-100 text-amber-800" };
+  if (diffDays <= 14) return { label: `${diffDays} days left`, className: "bg-amber-100 text-amber-800" };
+  return { label: `Expires ${formatShortDate(expiresAtIso)}`, className: "bg-slate-100 text-slate-800" };
 }
 
 export default async function StudentMyCoursesPage({ params }: { params: Promise<{ orgId: string }> }) {
@@ -67,6 +92,23 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
   const courseIds = (Array.isArray(enrollments) ? enrollments : [])
     .map((r: { course_id?: string | null }) => r.course_id)
     .filter((v): v is string => typeof v === "string");
+
+  const { data: accessRowsData } =
+    courseIds.length > 0
+      ? await supabase
+          .from("course_member_assignments")
+          .select("course_id, access_expires_at")
+          .eq("organization_id", orgId)
+          .eq("user_id", user.id)
+          .in("course_id", courseIds)
+      : { data: [] };
+
+  const accessExpiresByCourseId: Record<string, string | null> = {};
+  for (const r of (Array.isArray(accessRowsData) ? accessRowsData : []) as CourseAccessRow[]) {
+    const cid = typeof r.course_id === "string" ? r.course_id : null;
+    if (!cid) continue;
+    accessExpiresByCourseId[cid] = typeof r.access_expires_at === "string" ? r.access_expires_at : null;
+  }
 
   const { data: coursesData } =
     courseIds.length > 0
@@ -221,6 +263,7 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
           courses.map((course) => {
             const status = derivedStatus(course.id);
             const statusInfo = getStatusLabel(status);
+            const accessInfo = accessPill(accessExpiresByCourseId[course.id] ?? null);
             const total = totalByCourse[course.id] || 0;
             const done = completedByCourse[course.id] || 0;
             const progress = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -259,9 +302,14 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
                       <h3 className="text-lg font-semibold text-foreground truncate">{title}</h3>
                       <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{excerpt || "No excerpt yet."}</p>
                     </div>
-                    <span className={`shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusInfo.class}`}>
-                      {statusInfo.label}
-                    </span>
+                    <div className="shrink-0 flex flex-wrap items-center justify-end gap-2">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusInfo.class}`}>
+                        {statusInfo.label}
+                      </span>
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${accessInfo.className}`}>
+                        {accessInfo.label}
+                      </span>
+                    </div>
                   </div>
 
                   <div>

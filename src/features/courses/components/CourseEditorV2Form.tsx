@@ -30,6 +30,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { fetchJson } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { normalizeSlug } from "@/lib/courses/v2.shared";
+import {
+  ACCESS_DURATION_KEYS,
+  accessKeyLabel,
+  computeAccessExpiresAt,
+  type AccessDurationKey,
+  isAccessDurationKey,
+} from "@/lib/courseAssignments/access";
 import { RichTextEditorWithUploads } from "@/features/courses/components/v2/RichTextEditorWithUploads";
 import { QuizWizardModal } from "@/features/courses/components/v2/QuizWizardModal";
 import {
@@ -81,6 +88,8 @@ export type CourseV2 = {
   cover_image_url: string | null;
   permalink?: string;
   assigned_member_ids?: string[];
+  assigned_member_access?: Record<string, AccessDurationKey>;
+  assigned_member_expires_at?: Record<string, string | null>;
 };
 
 type SaveResultCourse = {
@@ -88,6 +97,12 @@ type SaveResultCourse = {
   slug: string | null;
   status: "draft" | "published" | null;
 };
+
+function formatExpiresChip(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+}
 
 type LessonVideoProvider = "html5" | "youtube" | "vimeo";
 
@@ -652,6 +667,28 @@ export function CourseEditorV2Form({
   const [pendingThumbnailRemoval, setPendingThumbnailRemoval] = useState(false);
   const thumbnailInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set(initialCourse?.assigned_member_ids ?? []));
+  const [memberDefaultAccess, setMemberDefaultAccess] = useState<AccessDurationKey>("unlimited");
+  const [memberAccessById, setMemberAccessById] = useState<Record<string, AccessDurationKey>>(() => {
+    const base = initialCourse?.assigned_member_access ?? {};
+    const ids = initialCourse?.assigned_member_ids ?? [];
+    const out: Record<string, AccessDurationKey> = {};
+    for (const id of ids) {
+      const raw = (base as Record<string, unknown>)[id];
+      out[id] = isAccessDurationKey(raw) ? (raw as AccessDurationKey) : "unlimited";
+    }
+    return out;
+  });
+  const [baselineMemberExpiresAtById, setBaselineMemberExpiresAtById] = useState<Record<string, string | null>>(() => {
+    const base = initialCourse?.assigned_member_expires_at ?? {};
+    const ids = initialCourse?.assigned_member_ids ?? [];
+    const out: Record<string, string | null> = {};
+    for (const id of ids) {
+      const raw = (base as Record<string, unknown>)[id];
+      out[id] = typeof raw === "string" ? raw : null;
+    }
+    return out;
+  });
+  const memberAccessPreviewEpochMsRef = useRef<number>(Date.now());
   const [membersOpen, setMembersOpen] = useState(false);
   const [memberSearch, setMemberSearch] = useState("");
 
@@ -1120,11 +1157,24 @@ export function CourseEditorV2Form({
   }
 
   async function saveMembers(courseIdToUse: string) {
+    const member_ids = [...selectedMemberIds];
+    const member_access: Record<string, AccessDurationKey> = {};
+    for (const id of member_ids) {
+      member_access[id] = memberAccessById[id] ?? memberDefaultAccess;
+    }
+    const now = new Date();
     await fetchJson<{ member_ids: string[] }>(`/api/v2/courses/${courseIdToUse}/members`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ member_ids: [...selectedMemberIds] }),
+      body: JSON.stringify({ member_ids, default_access: memberDefaultAccess, member_access }),
     });
+    // Optimistic baseline update (server computes similarly; this keeps the badge accurate without a page reload).
+    const nextBaseline: Record<string, string | null> = {};
+    for (const id of member_ids) {
+      const key = member_access[id] ?? "unlimited";
+      nextBaseline[id] = computeAccessExpiresAt(key, now);
+    }
+    setBaselineMemberExpiresAtById(nextBaseline);
   }
 
   function isTempId(id: string): boolean {
@@ -2375,7 +2425,10 @@ export function CourseEditorV2Form({
               <button
                 type="button"
                 className="mt-1 w-full h-10 rounded-md border bg-background px-3 text-left text-sm flex items-center justify-between hover:bg-muted/10 transition-colors cursor-pointer"
-                onClick={() => setMembersOpen((v) => !v)}
+                onClick={() => {
+                  memberAccessPreviewEpochMsRef.current = Date.now();
+                  setMembersOpen((v) => !v);
+                }}
               >
                 <span className="truncate">{selectedMemberIds.size > 0 ? `${selectedMemberIds.size} member(s) selected` : "Select members"}</span>
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -2385,18 +2438,40 @@ export function CourseEditorV2Form({
               {membersOpen ? (
                 <div className="absolute z-20 mt-2 w-full rounded-md border bg-card shadow-lg p-3 space-y-2">
                   <Input value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} placeholder="Search members..." />
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs text-muted-foreground">Time for access (applied when selecting members)</div>
+                    <select
+                      className="h-9 rounded-md border bg-background px-2 text-sm hover:cursor-pointer"
+                      value={memberDefaultAccess}
+                      onChange={(e) => setMemberDefaultAccess(e.target.value as AccessDurationKey)}
+                    >
+                      {ACCESS_DURATION_KEYS.map((k) => (
+                        <option key={k} value={k}>
+                          {accessKeyLabel(k)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <label className="flex items-center gap-2 text-sm cursor-pointer">
                     <input
                       type="checkbox"
                       checked={allFilteredSelected}
                       onChange={(e) => {
                         const checked = e.target.checked;
-                            if (status === "published") setNeedsRepublish(true);
+                        if (status === "published") setNeedsRepublish(true);
                         setSelectedMemberIds((prev) => {
                           const next = new Set(prev);
                           for (const m of filteredMembers) {
                             if (checked) next.add(m.id);
                             else next.delete(m.id);
+                          }
+                          return next;
+                        });
+                        setMemberAccessById((prev) => {
+                          const next = { ...prev };
+                          for (const m of filteredMembers) {
+                            if (checked) next[m.id] = next[m.id] ?? memberDefaultAccess;
+                            else delete next[m.id];
                           }
                           return next;
                         });
@@ -2413,17 +2488,69 @@ export function CourseEditorV2Form({
                           <input
                             type="checkbox"
                             checked={selectedMemberIds.has(m.id)}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              if (status === "published") setNeedsRepublish(true);
                               setSelectedMemberIds((prev) => {
-                                if (status === "published") setNeedsRepublish(true);
                                 const next = new Set(prev);
-                                if (e.target.checked) next.add(m.id);
+                                if (checked) next.add(m.id);
                                 else next.delete(m.id);
                                 return next;
-                              })
-                            }
+                              });
+                              setMemberAccessById((prev) => {
+                                const next = { ...prev };
+                                if (checked) next[m.id] = next[m.id] ?? memberDefaultAccess;
+                                else delete next[m.id];
+                                return next;
+                              });
+                            }}
                           />
                           <span className="truncate">{m.label}</span>
+                          {selectedMemberIds.has(m.id) ? (
+                            <span className="ml-auto inline-flex items-center gap-2">
+                              {(() => {
+                                const baselineIso = baselineMemberExpiresAtById[m.id] ?? null;
+                                const selectedKey = memberAccessById[m.id] ?? memberDefaultAccess;
+                                const baselineKeyRaw = (initialCourse?.assigned_member_access ?? {})[m.id];
+                                const baselineKey: AccessDurationKey = isAccessDurationKey(baselineKeyRaw) ? baselineKeyRaw : "unlimited";
+                                const isNewOrChanged = !baselineMemberExpiresAtById[m.id] || selectedKey !== baselineKey;
+
+                                const nowMs = Date.now();
+                                const iso = isNewOrChanged
+                                  ? computeAccessExpiresAt(selectedKey, new Date(memberAccessPreviewEpochMsRef.current))
+                                  : baselineIso;
+
+                                if (!iso) {
+                                  return <span className="text-[10px] text-muted-foreground">Unlimited</span>;
+                                }
+
+                                const ms = new Date(iso).getTime();
+                                const expired = Number.isFinite(ms) ? ms <= nowMs : false;
+                                const label = `${isNewOrChanged ? "Will expire" : expired ? "Expired" : "Expires"} ${formatExpiresChip(iso)}`;
+                                return (
+                                  <span className={`text-[10px] ${expired ? "text-destructive" : "text-muted-foreground"}`}>
+                                    {label}
+                                  </span>
+                                );
+                              })()}
+                              <select
+                                className="h-8 rounded-md border bg-background px-2 text-xs hover:cursor-pointer"
+                                value={memberAccessById[m.id] ?? "unlimited"}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) => {
+                                  const v = e.target.value as AccessDurationKey;
+                                  setMemberAccessById((prev) => ({ ...prev, [m.id]: v }));
+                                  if (status === "published") setNeedsRepublish(true);
+                                }}
+                              >
+                                {ACCESS_DURATION_KEYS.map((k) => (
+                                  <option key={k} value={k}>
+                                    {accessKeyLabel(k)}
+                                  </option>
+                                ))}
+                              </select>
+                            </span>
+                          ) : null}
                         </label>
                       ))
                     )}

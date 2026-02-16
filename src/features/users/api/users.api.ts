@@ -1,5 +1,6 @@
 import type { Role } from '@/types';
 import { fetchJson } from "@/lib/api";
+import type { AccessDurationKey } from "@/lib/courseAssignments/access";
 
 type ApiResult<T> = T & { message?: string };
 
@@ -73,11 +74,22 @@ export interface GetAssignableCoursesResponse {
 export interface GetUserCourseAssignmentsResponse {
   user_id: string;
   course_ids: string[];
+  assignments?: Array<{
+    course_id: string;
+    access_expires_at: string | null;
+    access_duration_key: string | null;
+    assigned_at: string | null;
+  }>;
 }
 
 export interface ReplaceUserCourseAssignmentsResponse {
   user_id: string;
   course_ids: string[];
+  assignments?: Array<{
+    course_id: string;
+    access_expires_at: string | null;
+    access_duration_key: string | null;
+  }>;
   added_count: number;
   removed_count: number;
 }
@@ -85,6 +97,7 @@ export interface ReplaceUserCourseAssignmentsResponse {
 export interface BulkCourseAssignmentsResponse {
   action: "assign" | "remove";
   course_id: string;
+  access?: AccessDurationKey;
   requested_count: number;
   success_count: number;
   failure_count: number;
@@ -221,11 +234,16 @@ export const usersApi = {
   /**
    * Replace one member's assignments with the given course IDs.
    */
-  async replaceUserCourseAssignments(userId: string, courseIds: string[]): Promise<ApiResult<ReplaceUserCourseAssignmentsResponse>> {
+  async replaceUserCourseAssignments(
+    userId: string,
+    input:
+      | { course_ids: string[] }
+      | { assignments: Array<{ course_id: string; access?: AccessDurationKey }> }
+  ): Promise<ApiResult<ReplaceUserCourseAssignmentsResponse>> {
     const { data, message } = await fetchJson<ReplaceUserCourseAssignmentsResponse>(`/api/users/${userId}/course-assignments`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ course_ids: courseIds }),
+      body: JSON.stringify(input),
     });
     return { ...data, message };
   },
@@ -237,6 +255,7 @@ export const usersApi = {
     user_ids: string[];
     course_id: string;
     action: "assign" | "remove";
+    access?: AccessDurationKey;
   }): Promise<ApiResult<BulkCourseAssignmentsResponse>> {
     const { data, message } = await fetchJson<BulkCourseAssignmentsResponse>("/api/course-assignments/bulk", {
       method: "POST",

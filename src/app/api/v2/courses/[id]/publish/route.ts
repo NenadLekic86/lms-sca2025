@@ -4,6 +4,8 @@ import { apiError, apiOk } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
 import { hasMeaningfulHtmlContent } from "@/lib/courses/v2";
 
+export const runtime = "nodejs";
+
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const { user: caller, error } = await getServerUser();

@@ -68,7 +68,11 @@ export default async function OrgCourseEditV2Page({
         .eq("role", "member")
         .neq("is_active", false)
         .order("full_name", { ascending: true }),
-      supabase.from("course_member_assignments").select("user_id").eq("course_id", courseId).eq("organization_id", orgId),
+      supabase
+        .from("course_member_assignments")
+        .select("user_id, access_duration_key, access_expires_at, assigned_at")
+        .eq("course_id", courseId)
+        .eq("organization_id", orgId),
     ]);
 
   if (courseError || !courseRow) redirect(`/org/${orgSlug}/courses`);
@@ -101,9 +105,17 @@ export default async function OrgCourseEditV2Page({
     items: (itemMap.get(t.id) ?? []).sort((a, b) => a.position - b.position),
   }));
 
-  const assignedMemberIds = (Array.isArray(assignedData) ? assignedData : [])
-    .map((r) => r.user_id)
-    .filter((v): v is string => typeof v === "string");
+  const assignedRows = Array.isArray(assignedData) ? assignedData : [];
+  const assignedMemberIds = assignedRows.map((r) => r.user_id).filter((v): v is string => typeof v === "string");
+  const assignedMemberAccess: Record<string, "unlimited" | "3m" | "1m" | "1w"> = {};
+  const assignedMemberExpiresAt: Record<string, string | null> = {};
+  for (const r of assignedRows as Array<{ user_id?: unknown; access_duration_key?: unknown; access_expires_at?: unknown }>) {
+    const uid = typeof r.user_id === "string" ? r.user_id : null;
+    if (!uid) continue;
+    const key = typeof r.access_duration_key === "string" ? r.access_duration_key : null;
+    assignedMemberAccess[uid] = key === "3m" || key === "1m" || key === "1w" ? key : "unlimited";
+    assignedMemberExpiresAt[uid] = typeof r.access_expires_at === "string" ? r.access_expires_at : null;
+  }
 
   const initialCourse: CourseV2 = {
     id: String(courseRow.id),
@@ -124,6 +136,8 @@ export default async function OrgCourseEditV2Page({
     intro_video_storage_path: (courseRow as { intro_video_storage_path?: string | null }).intro_video_storage_path ?? null,
     cover_image_url: (courseRow as { cover_image_url?: string | null }).cover_image_url ?? null,
     assigned_member_ids: assignedMemberIds,
+    assigned_member_access: assignedMemberAccess,
+    assigned_member_expires_at: assignedMemberExpiresAt,
   };
 
   return (

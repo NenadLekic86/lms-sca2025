@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { apiError, apiOk, readJsonBody } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
+import { computeAccessExpiresAt, type AccessDurationKey, isAccessDurationKey } from "@/lib/courseAssignments/access";
 
 export const runtime = "nodejs";
 
@@ -10,6 +11,7 @@ const bulkAssignmentsSchema = z.object({
   user_ids: z.array(z.string().uuid("Invalid user ID")).min(1).max(500),
   course_id: z.string().uuid("Invalid course ID"),
   action: z.enum(["assign", "remove"]),
+  access: z.enum(["unlimited", "3m", "1m", "1w"]).optional(),
 });
 
 type TargetUserRow = {
@@ -49,6 +51,7 @@ export async function POST(request: NextRequest) {
 
   const userIds = Array.from(new Set(parsed.data.user_ids));
   const { course_id: courseId, action } = parsed.data;
+  const access: AccessDurationKey = isAccessDurationKey(parsed.data.access) ? parsed.data.access : "unlimited";
   const admin = createAdminSupabaseClient();
 
   const { data: course, error: courseError } = await admin
@@ -127,11 +130,15 @@ export async function POST(request: NextRequest) {
 
   if (eligibleUserIds.length > 0) {
     if (action === "assign") {
+      const now = new Date();
       const rows = eligibleUserIds.map((userId) => ({
         organization_id: caller.organization_id,
         course_id: courseId,
         user_id: userId,
         assigned_by: caller.id,
+        assigned_at: now.toISOString(),
+        access_duration_key: access === "unlimited" ? null : access,
+        access_expires_at: computeAccessExpiresAt(access, now),
       }));
       const { error: assignError } = await admin
         .from("course_member_assignments")
@@ -182,6 +189,7 @@ export async function POST(request: NextRequest) {
         requested_count: userIds.length,
         success_count: eligibleUserIds.length,
         failure_count: failures.length,
+        ...(action === "assign" ? { access } : {}),
       },
     });
   } catch {
@@ -205,6 +213,7 @@ export async function POST(request: NextRequest) {
       success_count: eligibleUserIds.length,
       failure_count: failures.length,
       failures,
+      ...(action === "assign" ? { access } : {}),
     },
     {
       status: 200,
