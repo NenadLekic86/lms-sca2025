@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { apiError, apiOk } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
 import { createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
-import { sanitizeRichHtml } from "@/lib/courses/v2";
+import { sanitizeRichHtml } from "@/lib/courses/sanitize.server";
 
 export const runtime = "nodejs";
 

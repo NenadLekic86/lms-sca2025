@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { apiError, apiOk } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
-import { hasMeaningfulHtmlContent } from "@/lib/courses/v2";
+import { hasMeaningfulHtmlContent } from "@/lib/courses/sanitize.server";
 
 export const runtime = "nodejs";
 

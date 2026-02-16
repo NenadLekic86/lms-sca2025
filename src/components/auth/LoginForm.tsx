@@ -16,23 +16,32 @@ export function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [slowNotice, setSlowNotice] = useState(false);
   const [switchPrompt, setSwitchPrompt] = useState<{ currentEmail: string; targetEmail: string } | null>(null);
   const pendingCredsRef = useRef<{ email: string; password: string } | null>(null);
-  const watchdogRef = useRef<number | null>(null);
+  const slowTimerRef = useRef<number | null>(null);
+  const hardFailTimerRef = useRef<number | null>(null);
 
   function clearWatchdog() {
-    if (watchdogRef.current) {
-      window.clearTimeout(watchdogRef.current);
-      watchdogRef.current = null;
-    }
+    if (slowTimerRef.current) window.clearTimeout(slowTimerRef.current);
+    if (hardFailTimerRef.current) window.clearTimeout(hardFailTimerRef.current);
+    slowTimerRef.current = null;
+    hardFailTimerRef.current = null;
+    setSlowNotice(false);
   }
 
   function startWatchdog() {
     clearWatchdog();
-    watchdogRef.current = window.setTimeout(() => {
-      setIsLoading(false);
-      setError("Sign-in is taking longer than expected. Please try again. If you have multiple accounts, use Switch account first.");
+    // After 12s, show a non-blocking notice but keep loading.
+    slowTimerRef.current = window.setTimeout(() => {
+      setSlowNotice(true);
     }, 12_000);
+
+    // Only hard-fail after a longer timeout (covers slow networks/browsers like Firefox).
+    hardFailTimerRef.current = window.setTimeout(() => {
+      setIsLoading(false);
+      setError("Sign-in is taking too long. Please try again.");
+    }, 60_000);
   }
 
   async function resetSessionBestEffort() {
@@ -352,6 +361,12 @@ export function LoginForm() {
         >
           {isLoading ? "Signing in..." : "Sign In"}
         </Button>
+
+        {isLoading && slowNotice ? (
+          <div className="text-xs text-muted-foreground text-center">
+            Still signing you in… (this can take up to a minute on slow networks/browsers)
+          </div>
+        ) : null}
       </form>
 
       {/* Links */}

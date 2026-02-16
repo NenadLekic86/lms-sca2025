@@ -3,7 +3,8 @@ import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server"
 import { apiError, apiOk } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
 import { patchCourseV2Schema, validateSchema } from "@/lib/validations/schemas";
-import { coerceNullableText, coursePermalink, ensureUniqueCourseSlug, sanitizeRichHtml } from "@/lib/courses/v2";
+import { coerceNullableText, coursePermalink, ensureUniqueCourseSlug } from "@/lib/courses/v2";
+import { sanitizeRichHtml } from "@/lib/courses/sanitize.server";
 
 type CourseRow = {
   id: string;

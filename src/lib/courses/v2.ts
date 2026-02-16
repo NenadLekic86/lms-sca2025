@@ -1,4 +1,3 @@
-import DOMPurify from "isomorphic-dompurify";
 import { createAdminSupabaseClient } from "@/lib/supabase/server";
 import { normalizeSlug, coursePermalink } from "@/lib/courses/v2.shared";
 
@@ -31,33 +30,6 @@ export async function ensureUniqueCourseSlug(opts: {
   }
 
   throw new Error("Failed to generate unique slug.");
-}
-
-export function sanitizeRichHtml(input: string | null | undefined): string | null {
-  if (typeof input !== "string") return null;
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-  const clean = DOMPurify.sanitize(trimmed, {
-    USE_PROFILES: { html: true },
-    // Allow our controlled richtext attributes for security-safe styling.
-    ADD_ATTR: ["data-rt-color", "data-rt-bg", "data-callout", "data-callout-body"],
-  });
-  return clean.trim() || null;
-}
-
-export function hasMeaningfulHtmlContent(input: string | null | undefined): boolean {
-  const clean = sanitizeRichHtml(input);
-  if (!clean) return false;
-  // Strip tags and decode common HTML entities so empty markup like <p><br></p> does not pass.
-  const text = clean
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;|&#160;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/\s+/g, " ")
-    .trim();
-  return text.length >= 8;
 }
 
 export function coerceNullableText(input: unknown): string | null {

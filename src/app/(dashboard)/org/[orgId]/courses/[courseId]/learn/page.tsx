@@ -7,7 +7,7 @@ import Link from "next/link";
 import { CourseLearnClient } from "@/features/courses/components/CourseLearnClient";
 import { CourseLearnV2Client, type LearnV2Topic } from "@/features/courses/components/v2";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
-import { sanitizeRichHtml } from "@/lib/courses/v2";
+import { sanitizeRichHtml } from "@/lib/courses/sanitize.server";
 
 export const fetchCache = "force-no-store";
 
