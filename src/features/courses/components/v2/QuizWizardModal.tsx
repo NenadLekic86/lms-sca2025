@@ -17,6 +17,7 @@ import {
   Pencil,
   Plus,
   TextCursorInput,
+  Timer,
   ToggleLeft,
   Trash2,
   X,
@@ -39,7 +40,7 @@ export type QuizWizardSavePayload = {
   inline_images?: InlineImageQueue;
 };
 
-type QuizFeedbackMode = "default" | "reveal" | "retry";
+type QuizFeedbackMode = "default" | "reveal";
 type QuizTimeUnit = "seconds" | "minutes" | "hours";
 
 export type QuizQuestionType =
@@ -132,6 +133,9 @@ type QuizQuestion = {
   correct_option_id: string | null;
   correct_option_ids?: string[];
   correct_boolean?: boolean;
+  answer_explanation_mode?: "all" | "none" | "correct_only" | "incorrect_only";
+  answer_explanation_correct_html?: string;
+  answer_explanation_incorrect_html?: string;
   answer_explanation_html: string;
 };
 
@@ -166,6 +170,22 @@ function clampInt(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+function composeAnswerExplanationHtml(
+  mode: QuizQuestion["answer_explanation_mode"],
+  correctHtml: string,
+  incorrectHtml: string
+): string {
+  if (mode === "none") return "";
+  if (mode === "correct_only") return correctHtml;
+  if (mode === "incorrect_only") return incorrectHtml;
+  const trimmedCorrect = correctHtml.trim();
+  const trimmedIncorrect = incorrectHtml.trim();
+  if (trimmedCorrect && trimmedIncorrect) {
+    return `<p><strong>Correct answer explanation</strong></p>${correctHtml}<hr /><p><strong>Incorrect answer explanation</strong></p>${incorrectHtml}`;
+  }
+  return trimmedCorrect ? correctHtml : incorrectHtml;
+}
+
 function normalizePayload(initial: Record<string, unknown> | null | undefined, fallbackTitle: string, fallbackSummary: string): QuizV1Payload {
   const base = (initial ?? {}) as Partial<QuizV1Payload>;
   const settings = (base.settings ?? {}) as Partial<QuizSettings>;
@@ -180,6 +200,14 @@ function normalizePayload(initial: Record<string, unknown> | null | undefined, f
       const correctIds = Array.isArray(q.correct_option_ids) ? (q.correct_option_ids as string[]).filter(Boolean) : [];
       const correctId = typeof q.correct_option_id === "string" ? q.correct_option_id : null;
       const correctBoolean = typeof q.correct_boolean === "boolean" ? q.correct_boolean : true;
+      const legacyExplanation = typeof q.answer_explanation_html === "string" ? q.answer_explanation_html : "";
+      const answerExplanationMode =
+        q.answer_explanation_mode === "all" ||
+        q.answer_explanation_mode === "none" ||
+        q.answer_explanation_mode === "correct_only" ||
+        q.answer_explanation_mode === "incorrect_only"
+          ? q.answer_explanation_mode
+          : "none";
       return {
         id: typeof q.id === "string" ? q.id : makeId("q"),
         title: typeof q.title === "string" ? q.title : "",
@@ -207,7 +235,12 @@ function normalizePayload(initial: Record<string, unknown> | null | undefined, f
         correct_option_id: correctId,
         correct_option_ids: correctIds.length ? correctIds : correctId ? [correctId] : [],
         correct_boolean: correctBoolean,
-        answer_explanation_html: typeof q.answer_explanation_html === "string" ? q.answer_explanation_html : "",
+        answer_explanation_mode: answerExplanationMode,
+        answer_explanation_correct_html:
+          typeof q.answer_explanation_correct_html === "string" ? q.answer_explanation_correct_html : legacyExplanation,
+        answer_explanation_incorrect_html:
+          typeof q.answer_explanation_incorrect_html === "string" ? q.answer_explanation_incorrect_html : legacyExplanation,
+        answer_explanation_html: legacyExplanation,
       } as QuizQuestion;
     }),
     settings: {
@@ -216,8 +249,11 @@ function normalizePayload(initial: Record<string, unknown> | null | undefined, f
         ? settings.time_limit_unit
         : "minutes") as QuizTimeUnit,
       hide_quiz_time_display: Boolean(settings.hide_quiz_time_display ?? false),
-      feedback_mode: (settings.feedback_mode === "reveal" || settings.feedback_mode === "retry" ? settings.feedback_mode : "default") as QuizFeedbackMode,
-      attempts_allowed: clampInt(Number(settings.attempts_allowed ?? 0), 0, 10),
+      feedback_mode: (settings.feedback_mode === "reveal" ? "reveal" : "default") as QuizFeedbackMode,
+      attempts_allowed: (() => {
+        const raw = Number((settings as { attempts_allowed?: unknown }).attempts_allowed ?? 0);
+        return Number.isFinite(raw) ? clampInt(raw, 0, 10) : 0;
+      })(),
       passing_grade_percent: clampInt(Number(settings.passing_grade_percent ?? 80), 0, 100),
       max_questions_allowed_to_answer: clampInt(Number(settings.max_questions_allowed_to_answer ?? 10), 1, 500),
     },
@@ -235,6 +271,8 @@ const QUESTION_TYPE_OPTIONS: Array<{ id: QuizQuestionType; label: string }> = [
   { id: "image_answering", label: "Image Answering" },
   { id: "ordering", label: "Ordering" },
 ];
+
+const ENABLED_QUESTION_TYPES = new Set<QuizQuestionType>(["true_false", "single_choice", "multiple_choice"]);
 
 function questionTypeMeta(type: QuizQuestionType): { label: string; icon: React.ReactNode; iconWrapClass: string } {
   const label = QUESTION_TYPE_OPTIONS.find((t) => t.id === type)?.label ?? type;
@@ -262,36 +300,84 @@ function questionTypeMeta(type: QuizQuestionType): { label: string; icon: React.
   }
 }
 
+function QFieldLabel({ children, accent = "#1b8755" }: { children: React.ReactNode; accent?: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "7px", marginBottom: "7px" }}>
+      <span style={{ display: "block", width: 3, height: 16, borderRadius: 2, background: accent, flexShrink: 0 }} />
+      <span style={{ fontWeight: 700, fontSize: "13px", color: "#1a1a1a", letterSpacing: "0.01em" }}>
+        {children}
+      </span>
+    </div>
+  );
+}
+
+const STEP_GRADIENTS = [
+  "linear-gradient(135deg, #53a47f 0%, #3d9e6d 50%, #1b8755 100%)",
+  "linear-gradient(135deg, #1b6bb8 0%, #1a5da6 50%, #144a8a 100%)",
+  "linear-gradient(135deg, #7c3abd 0%, #6a31a6 50%, #5a2491 100%)",
+];
+const STEP_SHADOWS = [
+  "0 6px 20px rgba(27,135,85,0.38)",
+  "0 6px 20px rgba(27,107,184,0.38)",
+  "0 6px 20px rgba(124,58,189,0.38)",
+];
+const STEP_ICONS = ["📋", "❓", "⚙️"];
+
 function Stepper({ step }: { step: 1 | 2 | 3 }) {
   const steps = [
     { n: 1, label: "Quiz Info" },
-    { n: 2, label: "Question" },
+    { n: 2, label: "Questions" },
     { n: 3, label: "Settings" },
   ] as const;
 
   return (
-    <div className="px-5 pt-4">
-      <div className="grid grid-cols-3 gap-2">
-        {steps.map((s, idx) => {
+    <div
+      style={{
+        padding: "12px 20px 16px",
+        background: "linear-gradient(135deg, #c8edd8 0%, #b3e5c4 50%, #a5deb8 100%)",
+        borderBottom: "1px solid rgba(27,135,85,0.12)",
+      }}
+    >
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px" }}>
+        {steps.map((s) => {
           const done = step > s.n;
           const active = step === s.n;
+          const idx = s.n - 1;
           return (
-            <div key={s.n} className="relative">
-              {idx < steps.length - 1 ? (
-                <div className="absolute top-3 left-1/2 w-full z-0 pointer-events-none">
-                  <div className={cn("h-[2px] w-full", step > s.n ? "bg-primary" : "bg-muted")} />
-                </div>
-              ) : null}
-              <div className="flex flex-col items-center gap-2">
-                <div
-                  className={cn(
-                    "h-6 w-6 rounded-full border flex items-center justify-center text-xs font-semibold relative z-10 bg-background",
-                    done ? "bg-primary text-primary-foreground border-primary" : active ? "bg-primary/10 text-primary border-primary" : "bg-background text-muted-foreground"
-                  )}
-                >
-                  {done ? <Check className="h-4 w-4" /> : s.n}
-                </div>
-                <div className={cn("text-xs", active ? "text-foreground font-medium" : "text-muted-foreground")}>{s.label}</div>
+            <div
+              key={s.n}
+              title={done ? "Completed step" : active ? "Current step" : "Upcoming step"}
+              style={active ? {
+                background: STEP_GRADIENTS[idx],
+                backgroundSize: "200% 200%",
+                animation: "cb-gradient-shift 8s ease infinite",
+                boxShadow: STEP_SHADOWS[idx],
+                border: "1px solid rgba(255,255,255,0.35)",
+                color: "#ffffff",
+                borderRadius: "12px",
+                padding: "10px 14px",
+                transform: "translateY(-1px)",
+              } : done ? {
+                background: "rgba(255,255,255,0.95)",
+                border: `1px solid ${idx === 0 ? "rgba(27,135,85,0.3)" : idx === 1 ? "rgba(27,107,184,0.3)" : "rgba(124,58,189,0.3)"}`,
+                color: idx === 0 ? "#1b8755" : idx === 1 ? "#1b6bb8" : "#7c3abd",
+                borderRadius: "12px",
+                padding: "10px 14px",
+                boxShadow: "0 1px 6px rgba(0,0,0,0.07)",
+              } : {
+                background: "rgba(255,255,255,0.65)",
+                border: "1px solid rgba(255,255,255,0.5)",
+                color: "#9ca3af",
+                borderRadius: "12px",
+                padding: "10px 14px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px" }}>
+                <span style={{ fontWeight: 700, fontSize: "13px" }}>{STEP_ICONS[idx]} {s.label}</span>
+                {done ? <Check className="h-3.5 w-3.5" /> : null}
+              </div>
+              <div style={{ fontSize: "10px", marginTop: "2px", opacity: 0.82 }}>
+                {done ? "Completed" : active ? "In progress" : "Not started"}
               </div>
             </div>
           );
@@ -344,6 +430,9 @@ function SortableOptionRow({
   onToggleSelected,
   onEdit,
   onDelete,
+  isEditing = false,
+  onCloseEdit,
+  children,
 }: {
   option: QuizOption;
   selectionMode: "single" | "multi";
@@ -351,9 +440,174 @@ function SortableOptionRow({
   onToggleSelected: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  isEditing?: boolean;
+  onCloseEdit?: () => void;
+  children?: React.ReactNode;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: option.id });
   const style = { transform: CSS.Transform.toString(transform), transition };
+
+  /* ── Expanded / editing state: single unified card ── */
+  if (isEditing) {
+    return (
+      <div
+        ref={setNodeRef}
+        style={{
+          ...style,
+          borderRadius: "14px",
+          border: "2px solid rgba(27,107,184,0.45)",
+          background: "#ffffff",
+          boxShadow: "0 6px 28px rgba(27,107,184,0.18), 0 2px 8px rgba(0,0,0,0.07)",
+          overflow: "hidden",
+          opacity: isDragging ? 0.75 : 1,
+          transition: "box-shadow 200ms, opacity 200ms",
+        }}
+      >
+        {/* ── Card header (replaces the standalone row) ── */}
+        <div
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "10px 14px",
+            background: "linear-gradient(135deg, #dbeafe 0%, #ede9ff 100%)",
+            borderBottom: "1.5px solid rgba(27,107,184,0.18)",
+            gap: "8px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+            {/* Correct-answer toggle (radio / checkbox) */}
+            <button
+              type="button"
+              onClick={onToggleSelected}
+              title={selectionMode === "multi" ? "Toggle correct" : "Mark as correct"}
+              style={{
+                width: 22, height: 22, flexShrink: 0,
+                border: selected ? "2px solid #1b6bb8" : "2px solid #aaa",
+                borderRadius: selectionMode === "multi" ? "5px" : "50%",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: selected ? "rgba(27,107,184,0.1)" : "#fff",
+                cursor: "pointer",
+                transition: "all 160ms",
+              }}
+            >
+              {selected ? (
+                selectionMode === "multi" ? (
+                  <Check className="h-3.5 w-3.5" style={{ color: "#1b6bb8" }} />
+                ) : (
+                  <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#1b6bb8", display: "block" }} />
+                )
+              ) : null}
+            </button>
+
+            {/* Title + meta */}
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: "13px", color: "#1b5fa0", letterSpacing: "0.01em", display: "flex", alignItems: "center", gap: "5px" }}>
+                <Pencil style={{ width: 12, height: 12, flexShrink: 0 }} />
+                <span className="truncate">{option.title?.trim() || "(new option)"}</span>
+              </div>
+              <div style={{ fontSize: "11px", color: "#7b8fa8", marginTop: "2px" }}>
+                {option.display_format === "only_text" ? "Only text" : option.display_format === "only_image" ? "Only image" : "Text & image"}
+                {option.image_data_url ? " · has image" : ""}
+                {selected ? " · ✓ correct" : ""}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
+            {/* Drag handle */}
+            <button
+              type="button"
+              style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 30, height: 30, borderRadius: "8px",
+                background: "rgba(27,107,184,0.1)", border: "none",
+                cursor: "grab", color: "#1b6bb8",
+              }}
+              title="Drag to reorder"
+              {...attributes}
+              {...listeners}
+            >
+              <MoreVertical className="h-4 w-4" />
+            </button>
+            {/* Delete */}
+            <button
+              type="button"
+              onClick={onDelete}
+              style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 30, height: 30, borderRadius: "8px",
+                background: "rgba(220,38,38,0.08)", border: "none",
+                cursor: "pointer", color: "#dc2626",
+              }}
+              title="Delete option"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+            {/* Collapse / close */}
+            <button
+              type="button"
+              onClick={onCloseEdit}
+              style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 30, height: 30, borderRadius: "8px",
+                background: "rgba(0,0,0,0.06)", border: "none",
+                cursor: "pointer", color: "#555",
+              }}
+              title="Collapse editor"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* ── Card body (editing fields) ── */}
+        <div style={{ padding: "18px 16px", display: "flex", flexDirection: "column", gap: "18px" }}>
+          {children}
+
+          {/* ── Footer: Done / collapse button ── */}
+          {(() => {
+            const hasAnswer = option.title.trim().length > 0;
+            return (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", paddingTop: "4px", borderTop: "1px solid rgba(27,107,184,0.12)" }}>
+                {!hasAnswer ? (
+                  <span style={{ fontSize: "12px", color: "#e05c2a", fontWeight: 600, display: "flex", alignItems: "center", gap: "5px" }}>
+                    ⚠ Answer text is required before saving.
+                  </span>
+                ) : (
+                  <span />
+                )}
+                <button
+                  type="button"
+                  disabled={!hasAnswer}
+                  onClick={hasAnswer ? onCloseEdit : undefined}
+                  title={hasAnswer ? "Save and collapse" : "Type an answer before saving"}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: "7px",
+                    borderRadius: "9px",
+                    border: "none",
+                    background: hasAnswer
+                      ? "linear-gradient(135deg, #1b6bb8, #144a8a)"
+                      : "rgba(0,0,0,0.1)",
+                    boxShadow: hasAnswer ? "0 3px 12px rgba(27,107,184,0.35)" : "none",
+                    padding: "8px 20px",
+                    fontSize: "13px", fontWeight: 700,
+                    color: hasAnswer ? "#ffffff" : "#aaa",
+                    cursor: hasAnswer ? "pointer" : "not-allowed",
+                    transition: "all 180ms",
+                    opacity: hasAnswer ? 1 : 0.6,
+                  }}
+                >
+                  <Check className="h-3.5 w-3.5" />
+                  Done
+                </button>
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+    );
+  }
+
+  /* ── Collapsed / normal state: compact row ── */
   return (
     <div
       ref={setNodeRef}
@@ -382,7 +636,7 @@ function SortableOptionRow({
           <div className="text-sm font-medium truncate">{option.title?.trim() || "(untitled option)"}</div>
           <div className="text-[11px] text-muted-foreground">
             {option.display_format === "only_text" ? "Only text" : option.display_format === "only_image" ? "Only image" : "Text & image"}
-            {option.image_data_url ? " • image" : ""}
+            {option.image_data_url ? " · image" : ""}
           </div>
         </div>
       </div>
@@ -473,10 +727,14 @@ export function QuizWizardModal({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [queuedInlineImages, setQueuedInlineImages] = useState<InlineImageQueue>({});
 
-  const focusField = "focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-primary focus-visible:border-dashed focus-visible:outline-none";
-  const focusWithinField = "focus-within:border-primary focus-within:border-dashed";
+  const focusField = "focus-visible:ring-0 focus-visible:ring-offset-0";
+  const focusWithinField = "";
   const selectBase = "h-10 w-full rounded-md border bg-background px-3 text-sm outline-none";
-  const selectFocus = "focus:border-primary focus:border-dashed focus:ring-0 focus:outline-none";
+  const selectFocus = "focus:ring-0 focus:outline-none";
+
+  const attemptsAllowedSafe = Number.isFinite(Number((settings as { attempts_allowed?: unknown }).attempts_allowed))
+    ? Number((settings as { attempts_allowed?: unknown }).attempts_allowed)
+    : 0;
 
   function upsertQuestion(q: QuizQuestion) {
     setQuestions((prev) => {
@@ -559,6 +817,9 @@ export function QuizWizardModal({
       correct_option_id: null,
       correct_option_ids: [],
       correct_boolean: true,
+      answer_explanation_mode: "none",
+      answer_explanation_correct_html: "",
+      answer_explanation_incorrect_html: "",
       answer_explanation_html: "",
     };
     setEditingQuestion(q);
@@ -591,22 +852,25 @@ export function QuizWizardModal({
   }
 
   const content = (
-    <div className="p-4 space-y-6 max-h-[70vh] overflow-auto bg-muted/10">
+    <div
+      className="cb-quiz-form p-5 space-y-6 max-h-[70vh] overflow-auto"
+      style={{ background: "linear-gradient(160deg, #fafffe 0%, #f5fbf8 60%, #f8f6ff 100%)" }}
+    >
       {step === 1 ? (
-        <div className="space-y-4">
+        <div className="space-y-6">
           <div>
-            <label className="text-sm font-medium">Quiz Title</label>
+            <QFieldLabel>Quiz Title</QFieldLabel>
             <Input
-              className={cn("mt-1", focusField)}
+              className={cn(focusField)}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Type your quiz title here"
             />
           </div>
           <div>
-            <label className="text-sm font-medium">Summary</label>
+            <QFieldLabel>Summary</QFieldLabel>
             <Textarea
-              className={cn("mt-1", focusField)}
+              className={cn(focusField)}
               rows={8}
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
@@ -619,9 +883,23 @@ export function QuizWizardModal({
           {!editingQuestion ? (
             <>
               {questions.length ? (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {questions.map((q, idx) => (
-                    <div key={q.id} className="rounded-md border bg-background px-3 py-2 flex items-center justify-between gap-3">
+                    <div
+                      key={q.id}
+                      style={{
+                        borderRadius: "10px",
+                        border: "1px solid rgba(27,107,184,0.18)",
+                        borderLeft: "3px solid #1b6bb8",
+                        background: "#ffffff",
+                        padding: "10px 14px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "12px",
+                        boxShadow: "0 1px 6px rgba(0,0,0,0.06)",
+                      }}
+                    >
                       <div className="min-w-0">
                         <div className="text-sm font-medium truncate">
                           {idx + 1}. {q.title.trim() || "(untitled question)"}
@@ -643,13 +921,44 @@ export function QuizWizardModal({
                 </div>
               ) : null}
 
-              <Button type="button" variant="outline" onClick={startNewQuestion} className="w-fit gap-2">
-                <Plus className="h-4 w-4" />
+              <button
+                type="button"
+                onClick={startNewQuestion}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "8px",
+                  borderRadius: "10px",
+                  border: "1.5px solid rgba(27,107,184,0.28)",
+                  background: "rgba(27,107,184,0.05)",
+                  padding: "8px 18px",
+                  fontSize: "13px", fontWeight: 700, color: "#1b6bb8",
+                  cursor: "pointer",
+                  boxShadow: "0 1px 4px rgba(27,107,184,0.1)",
+                  transition: "all 150ms",
+                }}
+              >
+                <span style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  width: 22, height: 22, borderRadius: "6px",
+                  background: "linear-gradient(135deg, #1b6bb8, #144a8a)",
+                  boxShadow: "0 2px 6px rgba(27,107,184,0.35)",
+                  flexShrink: 0,
+                }}>
+                  <Plus className="h-3.5 w-3.5 text-white" />
+                </span>
                 Add Question
-              </Button>
+              </button>
             </>
           ) : (
-            <div className="space-y-5">
+            <div
+              className="space-y-6"
+              style={{
+                borderRadius: "14px",
+                border: "1px solid rgba(27,135,85,0.12)",
+                background: "#ffffff",
+                padding: "20px",
+                boxShadow: "0 4px 18px rgba(0,0,0,0.07)",
+              }}
+            >
               <div className="flex items-center justify-between">
                 <button
                   type="button"
@@ -662,9 +971,9 @@ export function QuizWizardModal({
               </div>
 
               <div>
-                <label className="text-sm font-medium">Write your question here</label>
+                <QFieldLabel accent="#1b6bb8">Write your question here</QFieldLabel>
                 <Input
-                  className={cn("mt-1", focusField)}
+                  className={cn(focusField)}
                   value={editingQuestion.title}
                   onChange={(e) => setEditingQuestion((prev) => (prev ? { ...prev, title: e.target.value } : prev))}
                   placeholder="Question 1"
@@ -672,8 +981,8 @@ export function QuizWizardModal({
               </div>
 
               <div>
-                <label className="text-sm font-medium">Select your question type</label>
-                <div className="relative mt-1">
+                <QFieldLabel accent="#1b6bb8">Select your question type</QFieldLabel>
+                <div className="relative">
                   {(() => {
                     const meta = questionTypeMeta(editingQuestion.type);
                     return (
@@ -697,20 +1006,62 @@ export function QuizWizardModal({
                   })()}
 
                   {questionTypeOpen ? (
-                    <div className="absolute z-50 mt-2 w-full rounded-md border bg-card shadow-lg p-2">
+                    <div
+                      className="absolute z-50 mt-2 w-full"
+                      style={{
+                        borderRadius: "14px",
+                        border: "1.5px solid rgba(27,107,184,0.28)",
+                        background: "linear-gradient(160deg, #f0f8ff 0%, #f8f6ff 100%)",
+                        boxShadow: "0 12px 40px rgba(27,107,184,0.18), 0 4px 12px rgba(0,0,0,0.1)",
+                        padding: "10px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: "11px", fontWeight: 700, color: "#1b6bb8",
+                          textTransform: "uppercase", letterSpacing: "0.07em",
+                          padding: "0 4px 8px 4px",
+                          borderBottom: "1px solid rgba(27,107,184,0.12)",
+                          marginBottom: "8px",
+                        }}
+                      >
+                        Select question type
+                      </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {QUESTION_TYPE_OPTIONS.map((t) => {
                           const active = editingQuestion.type === t.id;
+                          const enabled = ENABLED_QUESTION_TYPES.has(t.id);
                           const meta = questionTypeMeta(t.id);
                           return (
                             <button
                               key={t.id}
                               type="button"
-                              className={cn(
-                                "rounded-md border px-3 py-2 text-sm text-left hover:bg-muted/10 transition-colors flex items-center gap-2 cursor-pointer",
-                                active ? "border-primary bg-primary/5" : "bg-background"
-                              )}
+                              disabled={!enabled}
+                              title={enabled ? `Use ${meta.label}` : `${meta.label} - Coming soon`}
+                              style={{
+                                borderRadius: "9px",
+                                border: active
+                                  ? "1.5px solid #1b6bb8"
+                                  : enabled
+                                  ? "1px solid rgba(27,107,184,0.15)"
+                                  : "1px solid rgba(0,0,0,0.07)",
+                                background: active
+                                  ? "linear-gradient(135deg, rgba(27,107,184,0.12) 0%, rgba(27,107,184,0.05) 100%)"
+                                  : enabled
+                                  ? "#ffffff"
+                                  : "rgba(0,0,0,0.04)",
+                                padding: "8px 12px",
+                                textAlign: "left",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "10px",
+                                cursor: enabled ? "pointer" : "not-allowed",
+                                opacity: enabled ? 1 : 0.45,
+                                boxShadow: active ? "0 2px 8px rgba(27,107,184,0.14)" : "none",
+                                transition: "all 150ms",
+                              }}
                               onClick={() => {
+                                if (!enabled) return;
                                 setEditingQuestion((prev) => (prev ? applyQuestionTypeChange(prev, t.id) : prev));
                                 setQuestionTypeOpen(false);
                               }}
@@ -718,7 +1069,14 @@ export function QuizWizardModal({
                               <span className={cn("h-7 w-7 rounded-md flex items-center justify-center shrink-0", meta.iconWrapClass)}>
                                 {meta.icon}
                               </span>
-                              <span className="font-medium">{meta.label}</span>
+                              <div>
+                                <div style={{ fontWeight: 600, fontSize: "13px", color: active ? "#1b6bb8" : enabled ? "#1a1a1a" : "#888" }}>
+                                  {meta.label}
+                                </div>
+                                {!enabled && (
+                                  <div style={{ fontSize: "10px", color: "#aaa", fontWeight: 500 }}>Coming soon</div>
+                                )}
+                              </div>
                             </button>
                           );
                         })}
@@ -743,9 +1101,9 @@ export function QuizWizardModal({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm font-medium">Point(s) for this answer</label>
+                  <QFieldLabel accent="#1b6bb8">Point(s) for this answer</QFieldLabel>
                   <Input
-                    className={cn("mt-1", focusField)}
+                    className={cn(focusField)}
                     type="number"
                     min={0}
                     max={999}
@@ -763,8 +1121,8 @@ export function QuizWizardModal({
               </div>
 
               <div>
-                <label className="text-sm font-medium">Description (Optional)</label>
-                <div className="mt-2">
+                <QFieldLabel accent="#1b6bb8">Description (Optional)</QFieldLabel>
+                <div>
                   <RichTextEditorWithUploads
                     value={editingQuestion.description_html}
                     onChange={(html) => setEditingQuestion((prev) => (prev ? { ...prev, description_html: html } : prev))}
@@ -780,7 +1138,7 @@ export function QuizWizardModal({
               <div className="space-y-3">
                 {editingQuestion.type === "true_false" ? (
                   <>
-                    <div className="text-sm font-medium text-foreground">Correct answer</div>
+                    <QFieldLabel accent="#1b6bb8">Correct answer</QFieldLabel>
                     <TrueFalseCorrectSelector
                       value={typeof editingQuestion.correct_boolean === "boolean" ? editingQuestion.correct_boolean : true}
                       onChange={(v) => setEditingQuestion((prev) => (prev ? { ...prev, correct_boolean: v } : prev))}
@@ -792,247 +1150,358 @@ export function QuizWizardModal({
                   </div>
                 ) : (
                   <>
-                    <div className="text-sm font-medium text-foreground">Input options for the question and select the correct answer.</div>
+                    <QFieldLabel accent="#1b6bb8">Input options for the question and select the correct answer.</QFieldLabel>
 
-                    {editingQuestion.options.length ? (
-                      <DndContext
-                        sensors={sensors}
-                        collisionDetection={closestCenter}
-                        onDragEnd={(event: DragEndEvent) => {
-                          const { active, over } = event;
-                          if (!over || active.id === over.id) return;
+                    <div className="rounded-lg border bg-background p-3 space-y-3">
+                      {editingQuestion.options.length ? (
+                        <DndContext
+                          sensors={sensors}
+                          collisionDetection={closestCenter}
+                          onDragEnd={(event: DragEndEvent) => {
+                            const { active, over } = event;
+                            if (!over || active.id === over.id) return;
+                            setEditingQuestion((prev) => {
+                              if (!prev) return prev;
+                              const ordered = prev.options.slice().sort((a, b) => a.position - b.position);
+                              const oldIndex = ordered.findIndex((o) => o.id === active.id);
+                              const newIndex = ordered.findIndex((o) => o.id === over.id);
+                              if (oldIndex < 0 || newIndex < 0) return prev;
+                              const next = ordered.slice();
+                              const [moved] = next.splice(oldIndex, 1);
+                              next.splice(newIndex, 0, moved);
+                              return { ...prev, options: next.map((o, idx) => ({ ...o, position: idx })) };
+                            });
+                          }}
+                        >
+                          <SortableContext items={editingQuestion.options.slice().sort((a, b) => a.position - b.position).map((o) => o.id)} strategy={verticalListSortingStrategy}>
+                            <div className="space-y-2">
+                              {editingQuestion.options
+                                .slice()
+                                .sort((a, b) => a.position - b.position)
+                                .map((o) => {
+                                  const mode = editingQuestion.type === "multiple_choice" ? "multi" : "single";
+                                  const selected =
+                                    mode === "multi"
+                                      ? (editingQuestion.correct_option_ids ?? []).includes(o.id)
+                                      : editingQuestion.correct_option_id === o.id;
+                                  return (
+                                    <SortableOptionRow
+                                      key={o.id}
+                                      option={o}
+                                      selectionMode={mode}
+                                      selected={selected}
+                                      isEditing={optionEditorId === o.id}
+                                      onCloseEdit={() => setOptionEditorId(null)}
+                                      onToggleSelected={() =>
+                                        setEditingQuestion((prev) => {
+                                          if (!prev) return prev;
+                                          if (prev.type === "multiple_choice") {
+                                            const set = new Set(prev.correct_option_ids ?? []);
+                                            if (set.has(o.id)) set.delete(o.id);
+                                            else set.add(o.id);
+                                            const arr = [...set];
+                                            return { ...prev, correct_option_ids: arr, correct_option_id: arr[0] ?? null };
+                                          }
+                                          return { ...prev, correct_option_id: o.id, correct_option_ids: [o.id] };
+                                        })
+                                      }
+                                      onEdit={() => setOptionEditorId(o.id)}
+                                      onDelete={() =>
+                                        setEditingQuestion((prev) => {
+                                          if (!prev) return prev;
+                                          const filtered = prev.options.filter((x) => x.id !== o.id);
+                                          const nextCorrectIds = (prev.correct_option_ids ?? []).filter((id) => id !== o.id);
+                                          const nextCorrectId = prev.correct_option_id === o.id ? (nextCorrectIds[0] ?? null) : prev.correct_option_id;
+                                          return {
+                                            ...prev,
+                                            correct_option_id: nextCorrectId,
+                                            correct_option_ids: nextCorrectIds,
+                                            options: filtered.map((x, idx) => ({ ...x, position: idx })),
+                                          };
+                                        })
+                                      }
+                                    >
+                                      {/* Body rendered only when editing — becomes the card body */}
+                                      <div>
+                                        <QFieldLabel accent="#1b6bb8">Answer</QFieldLabel>
+                                        <Input
+                                          className={cn(focusField)}
+                                          value={editingQuestion.options.find((x) => x.id === o.id)?.title ?? ""}
+                                          onChange={(e) =>
+                                            setEditingQuestion((prev) => {
+                                              if (!prev) return prev;
+                                              return {
+                                                ...prev,
+                                                options: prev.options.map((x) => (x.id === o.id ? { ...x, title: e.target.value } : x)),
+                                              };
+                                            })
+                                          }
+                                          placeholder="Type answer text"
+                                        />
+                                      </div>
+
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div>
+                                          <QFieldLabel accent="#7c3abd">Upload Image</QFieldLabel>
+                                          <div
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={() => fileInputRef.current?.click()}
+                                            onKeyDown={(e) => {
+                                              if (e.key === "Enter" || e.key === " ") {
+                                                e.preventDefault();
+                                                fileInputRef.current?.click();
+                                              }
+                                            }}
+                                            onDragOver={(e) => {
+                                              e.preventDefault();
+                                              setIsOptionImageDragActive(true);
+                                            }}
+                                            onDragLeave={() => setIsOptionImageDragActive(false)}
+                                            onDrop={(e) => {
+                                              e.preventDefault();
+                                              setIsOptionImageDragActive(false);
+                                              const f = e.dataTransfer.files?.[0] ?? null;
+                                              if (f) void uploadOptionImage(f);
+                                            }}
+                                            className={cn(
+                                              "h-[180px] cursor-pointer rounded-md border border-dashed flex items-center justify-center overflow-hidden bg-muted/10 transition-colors",
+                                              isOptionImageDragActive ? "border-primary bg-primary/5" : "",
+                                              "focus:outline-none focus-visible:ring-0"
+                                            )}
+                                          >
+                                            {editingQuestion.options.find((x) => x.id === o.id)?.image_data_url ? (
+                                              // eslint-disable-next-line @next/next/no-img-element
+                                              <img
+                                                src={editingQuestion.options.find((x) => x.id === o.id)?.image_data_url as string}
+                                                alt="Option image preview"
+                                                className="h-full w-full object-cover"
+                                              />
+                                            ) : (
+                                              <div className="px-3 text-center">
+                                                <p className="text-xs text-muted-foreground">Drop or choose image</p>
+                                                <p className="mt-1 text-[11px] text-muted-foreground">Click here or drag file into this area</p>
+                                              </div>
+                                            )}
+                                          </div>
+                                          <input
+                                            ref={fileInputRef}
+                                            type="file"
+                                            accept="image/*"
+                                            className="hidden"
+                                            onChange={(e) => {
+                                              const f = e.target.files?.[0] ?? null;
+                                              if (f) void uploadOptionImage(f);
+                                              if (fileInputRef.current) fileInputRef.current.value = "";
+                                            }}
+                                          />
+                                          <div className="mt-2 text-xs text-muted-foreground">Recommended: 700x430 pixels</div>
+                                        </div>
+                                        <div>
+                                          <QFieldLabel accent="#7c3abd">Display format for options</QFieldLabel>
+                                          <div className="mt-2 space-y-2 text-sm">
+                                            {(
+                                              [
+                                                ["only_text", "Only text"],
+                                                ["only_image", "Only Image"],
+                                                ["text_and_image_both", "Text & Image both"],
+                                              ] as Array<[QuizOptionDisplayFormat, string]>
+                                            ).map(([id, label]) => {
+                                              const current =
+                                                editingQuestion.options.find((x) => x.id === o.id)?.display_format ?? "only_text";
+                                              return (
+                                                <label key={id} className="flex items-center gap-2">
+                                                  <input
+                                                    type="radio"
+                                                    name={`display_format_${o.id}`}
+                                                    checked={current === id}
+                                                    onChange={() =>
+                                                      setEditingQuestion((prev) => {
+                                                        if (!prev) return prev;
+                                                        return {
+                                                          ...prev,
+                                                          options: prev.options.map((x) => (x.id === o.id ? { ...x, display_format: id } : x)),
+                                                        };
+                                                      })
+                                                    }
+                                                  />
+                                                  {label}
+                                                </label>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </SortableOptionRow>
+                                  );
+                                })}
+                            </div>
+                          </SortableContext>
+                        </DndContext>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No answers yet. Add at least two answers and mark the correct one.</p>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const id = makeId("opt");
                           setEditingQuestion((prev) => {
                             if (!prev) return prev;
-                            const ordered = prev.options.slice().sort((a, b) => a.position - b.position);
-                            const oldIndex = ordered.findIndex((o) => o.id === active.id);
-                            const newIndex = ordered.findIndex((o) => o.id === over.id);
-                            if (oldIndex < 0 || newIndex < 0) return prev;
-                            const next = ordered.slice();
-                            const [moved] = next.splice(oldIndex, 1);
-                            next.splice(newIndex, 0, moved);
-                            return { ...prev, options: next.map((o, idx) => ({ ...o, position: idx })) };
+                            const next: QuizOption = {
+                              id,
+                              title: "",
+                              image_data_url: null,
+                              display_format: "only_text",
+                              position: prev.options.length,
+                            };
+                            return { ...prev, options: [...prev.options, next] };
                           });
+                          setOptionEditorId(id);
+                        }}
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: "8px",
+                          borderRadius: "9px",
+                          border: "1.5px solid rgba(27,107,184,0.25)",
+                          background: "rgba(27,107,184,0.04)",
+                          padding: "7px 14px",
+                          fontSize: "12px", fontWeight: 700, color: "#1b6bb8",
+                          cursor: "pointer",
+                          boxShadow: "0 1px 4px rgba(27,107,184,0.08)",
+                          transition: "all 150ms",
                         }}
                       >
-                        <SortableContext items={editingQuestion.options.slice().sort((a, b) => a.position - b.position).map((o) => o.id)} strategy={verticalListSortingStrategy}>
-                          <div className="space-y-2">
-                            {editingQuestion.options
-                              .slice()
-                              .sort((a, b) => a.position - b.position)
-                              .map((o) => {
-                                const mode = editingQuestion.type === "multiple_choice" ? "multi" : "single";
-                                const selected =
-                                  mode === "multi"
-                                    ? (editingQuestion.correct_option_ids ?? []).includes(o.id)
-                                    : editingQuestion.correct_option_id === o.id;
-                                return (
-                                  <SortableOptionRow
-                                    key={o.id}
-                                    option={o}
-                                    selectionMode={mode}
-                                    selected={selected}
-                                    onToggleSelected={() =>
-                                      setEditingQuestion((prev) => {
-                                        if (!prev) return prev;
-                                        if (prev.type === "multiple_choice") {
-                                          const set = new Set(prev.correct_option_ids ?? []);
-                                          if (set.has(o.id)) set.delete(o.id);
-                                          else set.add(o.id);
-                                          const arr = [...set];
-                                          return { ...prev, correct_option_ids: arr, correct_option_id: arr[0] ?? null };
-                                        }
-                                        return { ...prev, correct_option_id: o.id, correct_option_ids: [o.id] };
-                                      })
-                                    }
-                                    onEdit={() => setOptionEditorId(o.id)}
-                                    onDelete={() =>
-                                      setEditingQuestion((prev) => {
-                                        if (!prev) return prev;
-                                        const filtered = prev.options.filter((x) => x.id !== o.id);
-                                        const nextCorrectIds = (prev.correct_option_ids ?? []).filter((id) => id !== o.id);
-                                        const nextCorrectId = prev.correct_option_id === o.id ? (nextCorrectIds[0] ?? null) : prev.correct_option_id;
-                                        return {
-                                          ...prev,
-                                          correct_option_id: nextCorrectId,
-                                          correct_option_ids: nextCorrectIds,
-                                          options: filtered.map((x, idx) => ({ ...x, position: idx })),
-                                        };
-                                      })
-                                    }
-                                  />
-                                );
-                              })}
-                          </div>
-                        </SortableContext>
-                      </DndContext>
-                    ) : null}
-
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-fit gap-2"
-                      onClick={() => {
-                        const id = makeId("opt");
-                        setEditingQuestion((prev) => {
-                          if (!prev) return prev;
-                          const next: QuizOption = {
-                            id,
-                            title: "",
-                            image_data_url: null,
-                            display_format: "only_text",
-                            position: prev.options.length,
-                          };
-                          return { ...prev, options: [...prev.options, next] };
-                        });
-                        setOptionEditorId(id);
-                      }}
-                    >
-                      <Plus className="h-4 w-4" />
-                      Add An Option
-                    </Button>
+                        <span style={{
+                          display: "inline-flex", alignItems: "center", justifyContent: "center",
+                          width: 20, height: 20, borderRadius: "5px",
+                          background: "linear-gradient(135deg, #1b6bb8, #144a8a)",
+                          boxShadow: "0 2px 5px rgba(27,107,184,0.3)",
+                          flexShrink: 0,
+                        }}>
+                          <Plus className="h-3 w-3 text-white" />
+                        </span>
+                        Add an Option
+                      </button>
+                    </div>
                   </>
                 )}
-
-                {optionEditorId ? (
-                  <div className="rounded-lg border bg-background p-4 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold">Answer option</div>
-                      <Button type="button" variant="ghost" size="icon-sm" onClick={() => setOptionEditorId(null)} title="Close">
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    <div>
-                      <label className="text-sm font-medium">Answer Title</label>
-                      <Input
-                        className={cn("mt-1", focusField)}
-                        value={editingQuestion.options.find((o) => o.id === optionEditorId)?.title ?? ""}
-                        onChange={(e) =>
-                          setEditingQuestion((prev) => {
-                            if (!prev) return prev;
-                            return {
-                              ...prev,
-                              options: prev.options.map((o) => (o.id === optionEditorId ? { ...o, title: e.target.value } : o)),
-                            };
-                          })
-                        }
-                        placeholder="Answer title"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-sm font-medium">Upload Image</label>
-                        <div
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => fileInputRef.current?.click()}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              fileInputRef.current?.click();
-                            }
-                          }}
-                          onDragOver={(e) => {
-                            e.preventDefault();
-                            setIsOptionImageDragActive(true);
-                          }}
-                          onDragLeave={() => setIsOptionImageDragActive(false)}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            setIsOptionImageDragActive(false);
-                            const f = e.dataTransfer.files?.[0] ?? null;
-                            if (f) void uploadOptionImage(f);
-                          }}
-                          className={cn(
-                            "mt-2 h-[180px] cursor-pointer rounded-md border border-dashed flex items-center justify-center overflow-hidden bg-muted/10 transition-colors",
-                            isOptionImageDragActive ? "border-primary bg-primary/5" : "",
-                            "focus:outline-none focus-visible:ring-0 focus-visible:border-primary focus-visible:border-dashed"
-                          )}
-                        >
-                          {editingQuestion.options.find((o) => o.id === optionEditorId)?.image_data_url ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={editingQuestion.options.find((o) => o.id === optionEditorId)?.image_data_url as string}
-                              alt="Option image preview"
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <div className="px-3 text-center">
-                              <p className="text-xs text-muted-foreground">Drop or choose image</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">Click here or drag file into this area</p>
-                            </div>
-                          )}
-                        </div>
-                          <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            onChange={(e) => {
-                              const f = e.target.files?.[0] ?? null;
-                              if (f) void uploadOptionImage(f);
-                              if (fileInputRef.current) fileInputRef.current.value = "";
-                            }}
-                          />
-                        <div className="mt-2 text-xs text-muted-foreground">Recommended: 700×430 pixels</div>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium">Display format for options</label>
-                        <div className="mt-2 space-y-2 text-sm">
-                          {(
-                            [
-                              ["only_text", "Only text"],
-                              ["only_image", "Only Image"],
-                              ["text_and_image_both", "Text & Image both"],
-                            ] as Array<[QuizOptionDisplayFormat, string]>
-                          ).map(([id, label]) => {
-                            const current =
-                              editingQuestion.options.find((o) => o.id === optionEditorId)?.display_format ?? "only_text";
-                            return (
-                              <label key={id} className="flex items-center gap-2">
-                                <input
-                                  type="radio"
-                                  name="display_format"
-                                  checked={current === id}
-                                  onChange={() =>
-                                    setEditingQuestion((prev) => {
-                                      if (!prev) return prev;
-                                      return {
-                                        ...prev,
-                                        options: prev.options.map((o) => (o.id === optionEditorId ? { ...o, display_format: id } : o)),
-                                      };
-                                    })
-                                  }
-                                />
-                                {label}
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div>
-                      <Button type="button" onClick={() => setOptionEditorId(null)} className="w-fit">
-                        Update Answer
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
               </div>
 
               <div>
-                <label className="text-sm font-medium">Answer Explanation</label>
-                <div className="mt-2">
-                  <RichTextEditorWithUploads
-                    value={editingQuestion.answer_explanation_html}
-                    onChange={(html) => setEditingQuestion((prev) => (prev ? { ...prev, answer_explanation_html: html } : prev))}
-                    placeholder="Write an explanation shown after answering..."
-                    minHeightClass="min-h-[160px]"
-                    className={focusWithinField}
-                    queue={queuedInlineImages}
-                    setQueue={setQueuedInlineImages}
-                  />
+                <QFieldLabel accent="#1b6bb8">Would you like to show answer explanations after the quiz?</QFieldLabel>
+                <div className="space-y-2">
+                  {(
+                    [
+                      ["all", "Show all explanations", "Learners will see explanations for every question after the quiz."],
+                      ["none", "Show none", "No explanations are shown — learners only see their score."],
+                      ["correct_only", "Show only correct-answer explanation", "Explanations shown only when a learner answered correctly."],
+                      ["incorrect_only", "Show only incorrect-answer explanation", "Explanations shown only when a learner answered incorrectly."],
+                    ] as Array<["all" | "none" | "correct_only" | "incorrect_only", string, string]>
+                  ).map(([id, label, desc]) => {
+                    const active = (editingQuestion.answer_explanation_mode ?? "none") === id;
+                    return (
+                    <label
+                      key={id}
+                      style={{
+                        display: "flex", alignItems: "flex-start", gap: "12px",
+                        borderRadius: "10px",
+                        border: active ? "1.5px solid #1b6bb8" : "1px solid rgba(0,0,0,0.09)",
+                        background: active
+                          ? "linear-gradient(135deg, rgba(27,107,184,0.09) 0%, rgba(124,58,189,0.05) 100%)"
+                          : "#fafafa",
+                        padding: "11px 14px",
+                        cursor: "pointer",
+                        transition: "all 160ms",
+                        boxShadow: active ? "0 2px 10px rgba(27,107,184,0.13)" : "none",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="answer_explanation_mode"
+                        style={{ marginTop: "3px", accentColor: "#1b6bb8", flexShrink: 0 }}
+                        checked={active}
+                        onChange={() =>
+                          setEditingQuestion((prev) => {
+                            if (!prev) return prev;
+                            const mode = id;
+                            return {
+                              ...prev,
+                              answer_explanation_mode: mode,
+                              answer_explanation_html: composeAnswerExplanationHtml(
+                                mode,
+                                prev.answer_explanation_correct_html ?? "",
+                                prev.answer_explanation_incorrect_html ?? ""
+                              ),
+                            };
+                          })
+                        }
+                      />
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: "13px", color: active ? "#1b6bb8" : "#1a1a1a" }}>{label}</div>
+                        <div style={{ fontSize: "11px", color: "#777", marginTop: "2px" }}>{desc}</div>
+                      </div>
+                    </label>
+                    );
+                  })}
+                </div>
+
+                {(editingQuestion.answer_explanation_mode ?? "none") === "all" || (editingQuestion.answer_explanation_mode ?? "none") === "correct_only" ? (
+                  <div className="mt-3">
+                    <QFieldLabel accent="#1b6bb8">Correct-answer explanation</QFieldLabel>
+                    <div>
+                      <RichTextEditorWithUploads
+                        value={editingQuestion.answer_explanation_correct_html ?? ""}
+                        onChange={(html) =>
+                          setEditingQuestion((prev) => {
+                            if (!prev) return prev;
+                            const mode = prev.answer_explanation_mode ?? "none";
+                            const nextCorrect = html;
+                            return {
+                              ...prev,
+                              answer_explanation_correct_html: nextCorrect,
+                              answer_explanation_html: composeAnswerExplanationHtml(mode, nextCorrect, prev.answer_explanation_incorrect_html ?? ""),
+                            };
+                          })
+                        }
+                        placeholder="Write explanation shown when learner gets this question correct..."
+                        minHeightClass="min-h-[160px]"
+                        className={focusWithinField}
+                        queue={queuedInlineImages}
+                        setQueue={setQueuedInlineImages}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                {(editingQuestion.answer_explanation_mode ?? "none") === "all" || (editingQuestion.answer_explanation_mode ?? "none") === "incorrect_only" ? (
+                  <div className="mt-3">
+                    <QFieldLabel accent="#1b6bb8">Incorrect-answer explanation</QFieldLabel>
+                    <div>
+                      <RichTextEditorWithUploads
+                        value={editingQuestion.answer_explanation_incorrect_html ?? ""}
+                        onChange={(html) =>
+                          setEditingQuestion((prev) => {
+                            if (!prev) return prev;
+                            const mode = prev.answer_explanation_mode ?? "none";
+                            const nextIncorrect = html;
+                            return {
+                              ...prev,
+                              answer_explanation_incorrect_html: nextIncorrect,
+                              answer_explanation_html: composeAnswerExplanationHtml(mode, prev.answer_explanation_correct_html ?? "", nextIncorrect),
+                            };
+                          })
+                        }
+                        placeholder="Write explanation shown when learner gets this question incorrect..."
+                        minHeightClass="min-h-[160px]"
+                        className={focusWithinField}
+                        queue={queuedInlineImages}
+                        setQueue={setQueuedInlineImages}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                <div className="mt-2 text-xs text-muted-foreground">
+                  Existing learner flow still uses the saved explanation content. This mode controls which explanation content is composed and saved.
                 </div>
               </div>
 
@@ -1110,10 +1579,31 @@ export function QuizWizardModal({
           )}
         </div>
       ) : (
-        <div className="space-y-5">
-          <div className="w-full">
-            <label className="text-sm font-medium">Time Limit</label>
-            <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <div className="space-y-6">
+          <div
+            style={{
+              borderRadius: "14px",
+              border: "1px solid rgba(27,135,85,0.1)",
+              background: "#ffffff",
+              padding: "16px",
+              boxShadow: "0 3px 14px rgba(0,0,0,0.06)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+              <span style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 28, height: 28, borderRadius: "8px",
+                background: "linear-gradient(135deg, #1b8755, #0e4d2c)",
+                boxShadow: "0 2px 8px rgba(27,135,85,0.3)",
+                flexShrink: 0,
+              }}>
+                <Timer className="h-4 w-4 text-white" />
+              </span>
+              <span style={{ fontWeight: 700, fontSize: "13px", color: "#1a1a1a", letterSpacing: "0.01em" }}>
+                Time Limit
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <Input
                 type="number"
                 min={0}
@@ -1142,80 +1632,186 @@ export function QuizWizardModal({
             <div className="mt-1 text-xs text-muted-foreground">0 means no time limit.</div>
           </div>
 
-          <div className="space-y-2">
-            <div className="text-sm font-medium">Quiz Feedback Mode</div>
-            <div className="text-xs text-muted-foreground">(Pick the quiz system&apos;s behaviour on choice based questions.)</div>
+          <div
+            style={{
+              borderRadius: "14px",
+              border: "1px solid rgba(27,107,184,0.12)",
+              background: "#ffffff",
+              padding: "16px",
+              boxShadow: "0 3px 14px rgba(0,0,0,0.06)",
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "4px", color: "#1a1a1a" }}>👁️ Answer visibility</div>
+            <div className="text-xs text-muted-foreground mb-3">Choose when learners should see quiz answers and feedback.</div>
+            <div className="space-y-2">
             {(
               [
-                ["default", "Default", "Answers shown after quiz is finished"],
-                ["reveal", "Reveal Mode", "Show result after the attempt."],
-                ["retry", "Retry Mode", "Reattempt quiz any number of times. Define Attempts Allowed below."],
+                ["default", "After quiz finished", "Learners see the answer feedback after all questions are submitted."],
+                ["reveal", "After each question", "Learners see answer feedback immediately after each submitted question."],
               ] as Array<[QuizFeedbackMode, string, string]>
-            ).map(([id, label, desc]) => (
-              <label key={id} className={cn("flex items-start gap-3 rounded-lg border bg-background p-3 cursor-pointer", settings.feedback_mode === id ? "border-primary" : "")}>
+            ).map(([id, label, desc]) => {
+              const active = settings.feedback_mode === id;
+              return (
+                <label
+                  key={id}
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "12px",
+                    borderRadius: "10px",
+                    border: active ? "1.5px solid #1b6bb8" : "1px solid rgba(0,0,0,0.09)",
+                    background: active
+                      ? "linear-gradient(135deg, rgba(27,107,184,0.10) 0%, rgba(27,107,184,0.04) 100%)"
+                      : "#fafafa",
+                    padding: "12px 14px",
+                    cursor: "pointer",
+                    transition: "all 160ms",
+                    boxShadow: active ? "0 3px 12px rgba(27,107,184,0.15)" : "none",
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="feedback_mode"
+                    checked={active}
+                    onChange={() => setSettings((prev) => ({ ...prev, feedback_mode: id }))}
+                    style={{ marginTop: "2px", accentColor: "#1b6bb8" }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: "13px", color: active ? "#1b6bb8" : "#1a1a1a" }}>{label}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{desc}</div>
+                  </div>
+                </label>
+              );
+            })}
+            </div>
+          </div>
+
+          <div
+            style={{
+              borderRadius: "14px",
+              border: "1px solid rgba(124,58,189,0.12)",
+              background: "#ffffff",
+              padding: "16px",
+              boxShadow: "0 3px 14px rgba(0,0,0,0.06)",
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "4px", color: "#1a1a1a" }}>🔁 Attempts policy</div>
+            <div className="text-xs text-muted-foreground mb-3">Control how many times a learner can retry this quiz.</div>
+            <div className="space-y-2">
+            {(
+              [
+                ["single", "Single attempt", "Allow exactly one attempt."],
+                ["limited", "Limited attempts", "Allow a limited number of attempts that you choose."],
+                ["unlimited", "Unlimited attempts", "Allow unlimited retries."],
+              ] as Array<["single" | "limited" | "unlimited", string, string]>
+            ).map(([id, label, desc]) => {
+              const attemptsMode = attemptsAllowedSafe === 0 ? "unlimited" : attemptsAllowedSafe === 1 ? "single" : "limited";
+              const active = attemptsMode === id;
+              return (
+                <label
+                  key={id}
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "12px",
+                    borderRadius: "10px",
+                    border: active ? "1.5px solid #7c3abd" : "1px solid rgba(0,0,0,0.09)",
+                    background: active
+                      ? "linear-gradient(135deg, rgba(124,58,189,0.10) 0%, rgba(124,58,189,0.04) 100%)"
+                      : "#fafafa",
+                    padding: "12px 14px",
+                    cursor: "pointer",
+                    transition: "all 160ms",
+                    boxShadow: active ? "0 3px 12px rgba(124,58,189,0.15)" : "none",
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="attempts_mode"
+                    checked={active}
+                    onChange={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        attempts_allowed: id === "unlimited" ? 0 : id === "single" ? 1 : Math.max(2, prev.attempts_allowed || 2),
+                      }))
+                    }
+                    style={{ marginTop: "2px", accentColor: "#7c3abd" }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: "13px", color: active ? "#7c3abd" : "#1a1a1a" }}>{label}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{desc}</div>
+                  </div>
+                </label>
+              );
+            })}
+
+            <div className={cn((attemptsAllowedSafe === 0 || attemptsAllowedSafe === 1) && "opacity-60")}>
+              <div className="mt-3 flex items-center gap-3">
                 <input
-                  type="radio"
-                  name="feedback_mode"
-                  checked={settings.feedback_mode === id}
-                  onChange={() => setSettings((prev) => ({ ...prev, feedback_mode: id }))}
-                  className="mt-1"
+                  type="range"
+                  min={2}
+                  max={10}
+                  value={attemptsAllowedSafe > 1 ? attemptsAllowedSafe : 2}
+                  disabled={attemptsAllowedSafe === 0 || attemptsAllowedSafe === 1}
+                  onChange={(e) => setSettings((prev) => ({ ...prev, attempts_allowed: clampInt(Number(e.target.value || 2), 2, 10) }))}
+                  className="w-full"
+                  style={{ accentColor: "#7c3abd" }}
                 />
-                <div>
-                  <div className="text-sm font-medium">{label}</div>
-                  <div className="text-xs text-muted-foreground">{desc}</div>
+                <div
+                  style={{
+                    width: 38, height: 34, borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center",
+                    fontWeight: 700, fontSize: "14px",
+                    background: "linear-gradient(135deg, #7c3abd, #5a2491)",
+                    color: "#fff",
+                    boxShadow: "0 2px 8px rgba(124,58,189,0.3)",
+                  }}
+                >
+                  {attemptsAllowedSafe > 1 ? attemptsAllowedSafe : "-"}
                 </div>
-              </label>
-            ))}
-          </div>
-
-          <div className={cn(settings.feedback_mode !== "retry" && "opacity-60")}>
-            <div className="text-sm font-medium">Attempts Allowed</div>
-            <div className="mt-2 flex items-center gap-3">
-              <input
-                type="range"
-                min={0}
-                max={10}
-                value={settings.attempts_allowed}
-                disabled={settings.feedback_mode !== "retry"}
-                onChange={(e) => setSettings((prev) => ({ ...prev, attempts_allowed: clampInt(Number(e.target.value || 0), 0, 10) }))}
-                className="w-full"
-              />
-              <div className="w-10 h-8 rounded-md bg-primary text-primary-foreground flex items-center justify-center text-sm font-semibold">
-                {settings.attempts_allowed}
               </div>
+              <div className="mt-1 text-xs text-muted-foreground">Use this slider only when Limited attempts is selected.</div>
             </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              Restriction on the number of attempts a student is allowed to take for this quiz. 0 for no limit.
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium">Passing Grade (%)</label>
-              <Input
-                type="number"
-                min={0}
-                max={100}
-                value={settings.passing_grade_percent}
-                className={cn("mt-2", focusField)}
-                onChange={(e) => setSettings((prev) => ({ ...prev, passing_grade_percent: clampInt(Number(e.target.value || 0), 0, 100) }))}
-              />
-              <div className="mt-1 text-xs text-muted-foreground">Set the passing percentage for this quiz</div>
-            </div>
-            <div>
-              <label className="text-sm font-medium">Max Question Allowed to Answer</label>
-              <Input
-                className={cn("mt-2", focusField)}
-                type="number"
-                min={1}
-                max={500}
-                value={settings.max_questions_allowed_to_answer}
-                onChange={(e) =>
-                  setSettings((prev) => ({ ...prev, max_questions_allowed_to_answer: clampInt(Number(e.target.value || 10), 1, 500) }))
-                }
-              />
-              <div className="mt-1 text-xs text-muted-foreground">
-                This amount of question will be available for members to answer, and questions will come randomly from all available questions belongs with a quiz, if this amount is greater then available question, then all questions will be available for a member to answer.
+          <div
+            style={{
+              borderRadius: "14px",
+              border: "1px solid rgba(27,135,85,0.12)",
+              background: "#ffffff",
+              padding: "16px",
+              boxShadow: "0 3px 14px rgba(0,0,0,0.06)",
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "14px", color: "#1a1a1a" }}>📊 Scoring & Question Pool</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <QFieldLabel accent="#1b8755">Passing Grade (%)</QFieldLabel>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={settings.passing_grade_percent}
+                  className={cn(focusField)}
+                  onChange={(e) => setSettings((prev) => ({ ...prev, passing_grade_percent: clampInt(Number(e.target.value || 0), 0, 100) }))}
+                />
+                <div className="mt-1 text-xs text-muted-foreground">Set the passing percentage for this quiz</div>
+              </div>
+              <div>
+                <QFieldLabel accent="#1b8755">Max Question Allowed to Answer</QFieldLabel>
+                <Input
+                  className={cn(focusField)}
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={settings.max_questions_allowed_to_answer}
+                  onChange={(e) =>
+                    setSettings((prev) => ({ ...prev, max_questions_allowed_to_answer: clampInt(Number(e.target.value || 10), 1, 500) }))
+                  }
+                />
+                <div className="mt-1 text-xs text-muted-foreground">
+                  This defines how many questions a learner must answer in one attempt. Questions are selected randomly from the quiz pool. If this number is greater than the available questions, all questions are shown.
+                </div>
               </div>
             </div>
           </div>
@@ -1225,24 +1821,61 @@ export function QuizWizardModal({
   );
 
   return (
-    <div className="fixed inset-0 z-1000 bg-black/50 p-4 sm:p-6 overflow-y-auto" data-leave-guard-ignore="true">
+    <div className="fixed inset-0 z-1000 bg-black/60 p-4 sm:p-6 overflow-y-auto" data-leave-guard-ignore="true">
       <div className="min-h-[calc(100svh-2rem)] sm:min-h-[calc(100svh-3rem)] flex items-center justify-center">
-        <div className="w-full max-w-4xl rounded-lg border bg-card shadow-xl overflow-hidden">
-          <div className="flex items-center justify-between border-b px-4 py-3">
-            <div className="flex items-center gap-2">
-              <ClipboardList className="h-5 w-5 text-primary" />
-              <h3 className="font-semibold">Quiz</h3>
+        <div
+          className="w-full max-w-4xl overflow-hidden"
+          style={{
+            borderRadius: "20px",
+            boxShadow: "0 24px 64px rgba(0,0,0,0.22), 0 8px 24px rgba(0,0,0,0.12)",
+            border: "1px solid rgba(27,135,85,0.15)",
+            background: "#fff",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "16px 20px",
+              background: "linear-gradient(135deg, #1b8755 0%, #0e4d2c 100%)",
+              borderBottom: "none",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "#fff" }}>
+              <ClipboardList className="h-5 w-5" />
+              <h3 style={{ fontWeight: 700, fontSize: "16px" }}>Quiz Builder</h3>
             </div>
-            <Button type="button" size="icon-sm" variant="ghost" onClick={closeAndCleanup}>
+            <button
+              type="button"
+              onClick={closeAndCleanup}
+              style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 32, height: 32, borderRadius: "8px",
+                background: "rgba(255,255,255,0.2)",
+                border: "1px solid rgba(255,255,255,0.25)",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+            >
               <X className="h-4 w-4" />
-            </Button>
+            </button>
           </div>
 
           <Stepper step={step} />
 
           {content}
 
-          <div className="flex items-center justify-between border-t px-4 py-3 bg-background">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              borderTop: "1px solid rgba(27,135,85,0.1)",
+              padding: "14px 20px",
+              background: "linear-gradient(135deg, #f0faf6 0%, #e8f5ed 100%)",
+            }}
+          >
             <Button type="button" variant="outline" onClick={closeAndCleanup}>
               Cancel
             </Button>

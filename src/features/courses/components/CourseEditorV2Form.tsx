@@ -3,11 +3,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Award,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronUp,
   ExternalLink,
+  Eye,
+  FileText,
   GripVertical,
   Loader2,
   Pencil,
@@ -39,6 +42,7 @@ import {
 } from "@/lib/courseAssignments/access";
 import { RichTextEditorWithUploads } from "@/features/courses/components/v2/RichTextEditorWithUploads";
 import { QuizWizardModal } from "@/features/courses/components/v2/QuizWizardModal";
+import { CertificatePlacementModal, type CertificateNamePlacement } from "@/features/certificates/components/CertificatePlacementModal";
 import {
   extractInlineUploadIdsFromHtml,
   finalizeInlineImagesInHtml,
@@ -203,8 +207,31 @@ function makeBlockId(): string {
 }
 
 function FieldHint({ children }: { children: React.ReactNode }) {
-  return <p className="mt-1 text-xs text-muted-foreground">{children}</p>;
+  return <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{children}</p>;
 }
+
+function FieldLabel({ children, accent = "#1b8755" }: { children: React.ReactNode; accent?: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "7px", marginBottom: "7px" }}>
+      <span
+        style={{ display: "block", width: 3, height: 16, borderRadius: 2, background: accent, flexShrink: 0 }}
+      />
+      <span style={{ fontWeight: 700, fontSize: "13px", color: "#1a1a1a", letterSpacing: "0.01em" }}>
+        {children}
+      </span>
+    </div>
+  );
+}
+
+const SECTION_META: Record<string, { icon: string; accent: string; headerFrom: string; headerTo: string }> = {
+  "Course Info":     { icon: "📋", accent: "#1b8755", headerFrom: "#f0faf6", headerTo: "#e8f5ed" },
+  "Video":           { icon: "🎬", accent: "#1b6bb8", headerFrom: "#f0f6ff", headerTo: "#e8effe" },
+  "Course Thumbnail":{ icon: "🖼️", accent: "#7c3abd", headerFrom: "#f8f2ff", headerTo: "#f0eaff" },
+  "Course Settings": { icon: "⚙️", accent: "#b87216", headerFrom: "#fffbf0", headerTo: "#fff3dc" },
+  "Course Builder":  { icon: "🏗️", accent: "#0e4d2c", headerFrom: "#e8f5ed", headerTo: "#d5eddf" },
+  "Additional Data": { icon: "📂", accent: "#1e6b8c", headerFrom: "#f0faff", headerTo: "#e2f4fc" },
+  "Certificate":     { icon: "🏆", accent: "#1b8755", headerFrom: "#f0faf6", headerTo: "#e8f5ed" },
+};
 
 function DetailsSection({
   title,
@@ -215,18 +242,73 @@ function DetailsSection({
   defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const meta = SECTION_META[title] ?? { icon: "📄", accent: "#1b8755", headerFrom: "#f0faf6", headerTo: "#e8f5ed" };
+
   return (
-    <details className="group rounded-lg border bg-card shadow-sm [&_summary::-webkit-details-marker]:hidden" open={defaultOpen}>
-      <summary className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <h2 className="text-sm font-semibold tracking-wide">{title}</h2>
+    <div
+      style={{
+        borderRadius: "16px",
+        overflow: "hidden",
+        boxShadow: "0 4px 24px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.04)",
+        border: `1px solid ${meta.accent}22`,
+        background: "#ffffff",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "14px 20px",
+          background: `linear-gradient(135deg, ${meta.headerFrom} 0%, ${meta.headerTo} 100%)`,
+          borderBottom: open ? `1px solid ${meta.accent}18` : "none",
+          cursor: "pointer",
+          textAlign: "left",
+          gap: "10px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 30,
+              height: 30,
+              borderRadius: "8px",
+              background: `${meta.accent}18`,
+              fontSize: "16px",
+              flexShrink: 0,
+            }}
+          >
+            {meta.icon}
+          </span>
+          <h2 style={{ fontWeight: 700, fontSize: "14px", color: "#1a1a1a", letterSpacing: "0.01em" }}>
+            {title}
+          </h2>
         </div>
-        <div className="flex items-center gap-1 text-muted-foreground">
-          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+        <ChevronDown
+          style={{
+            transform: open ? "rotate(180deg)" : "rotate(0deg)",
+            transition: "transform 220ms ease",
+            color: meta.accent,
+            width: 18,
+            height: 18,
+            flexShrink: 0,
+          }}
+        />
+      </button>
+
+      {open && (
+        <div style={{ padding: "20px 20px" }}>
+          {children}
         </div>
-      </summary>
-      <div className="border-t px-4 py-4">{children}</div>
-    </details>
+      )}
+    </div>
   );
 }
 
@@ -293,15 +375,32 @@ function SortableTopicRow({
   return (
     <div
       ref={setNodeRef}
-      style={style}
-      className={cn("rounded-md border bg-muted/10", isDragging && "opacity-70 shadow-md")}
+      style={{
+        ...style,
+        borderRadius: "12px",
+        border: "1px solid rgba(27,135,85,0.15)",
+        background: "#ffffff",
+        boxShadow: isDragging ? "0 8px 24px rgba(0,0,0,0.14)" : "0 2px 10px rgba(0,0,0,0.06)",
+        overflow: "hidden",
+        opacity: isDragging ? 0.75 : 1,
+      }}
     >
-      <div className="flex items-center justify-between gap-2 px-3 py-3 border-b bg-muted/10">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "8px",
+          padding: "10px 14px",
+          background: "linear-gradient(135deg, #f0faf6 0%, #e8f5ed 100%)",
+          borderBottom: "1px solid rgba(27,135,85,0.1)",
+        }}
+      >
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
             className="text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing"
-            aria-label="Move topic"
+            aria-label="Move chapter"
             {...attributes}
             {...listeners}
           >
@@ -314,22 +413,22 @@ function SortableTopicRow({
         </div>
 
         <div className="flex items-center gap-1">
-          <Button type="button" variant="ghost" size="icon-sm" onClick={onEdit} title="Edit topic">
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onEdit} title="Edit chapter">
             <Pencil className="h-4 w-4" />
           </Button>
-          <Button type="button" variant="ghost" size="icon-sm" onClick={onDelete} title="Delete topic">
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onDelete} title="Delete chapter">
             <Trash2 className="h-4 w-4" />
           </Button>
-          <Button type="button" variant="ghost" size="icon-sm" onClick={onToggle} title={expanded ? "Collapse topic" : "Expand topic"}>
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onToggle} title={expanded ? "Collapse chapter" : "Expand chapter"}>
             {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </Button>
         </div>
       </div>
 
       {expanded ? (
-        <div className="px-3 py-3 space-y-3">
+        <div className="px-3 py-3 space-y-3" style={{ background: "#fafffe" }}>
           {topic.items.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No content items yet for this topic.</p>
+            <p className="text-xs text-muted-foreground">No content items yet for this chapter.</p>
           ) : (
             <div className="space-y-2">
               <DndContext
@@ -415,11 +514,24 @@ function SortableTopicItemRow({
     transition,
   };
 
+  const isLesson = item.item_type === "lesson";
   return (
     <div
       ref={setNodeRef}
-      style={style}
-      className={cn("flex items-center justify-between rounded-md border bg-background px-3 py-2", isDragging && "opacity-70 shadow-md")}
+      style={{
+        ...style,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        borderRadius: "9px",
+        border: isLesson ? "1px solid rgba(27,107,184,0.18)" : "1px solid rgba(124,58,189,0.18)",
+        borderLeft: isLesson ? "3px solid #1b6bb8" : "3px solid #7c3abd",
+        background: "#ffffff",
+        padding: "8px 12px",
+        boxShadow: isDragging ? "0 6px 18px rgba(0,0,0,0.12)" : "0 1px 4px rgba(0,0,0,0.05)",
+        opacity: isDragging ? 0.75 : 1,
+        gap: "8px",
+      }}
     >
       <div className="flex items-center gap-2 min-w-0">
         <button
@@ -432,7 +544,20 @@ function SortableTopicItemRow({
           <GripVertical className="h-4 w-4" />
         </button>
         <p className="text-sm font-medium truncate">{item.title?.trim() || "(untitled)"}</p>
-        <p className="text-xs text-muted-foreground uppercase ml-2">{item.item_type}</p>
+        <span
+          style={{
+            fontSize: "10px",
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            padding: "2px 7px",
+            borderRadius: "99px",
+            background: isLesson ? "rgba(27,107,184,0.1)" : "rgba(124,58,189,0.1)",
+            color: isLesson ? "#1b6bb8" : "#7c3abd",
+            textTransform: "uppercase",
+          }}
+        >
+          {item.item_type}
+        </span>
       </div>
       <div className="flex items-center gap-1">
         {item.item_type === "lesson" ? (
@@ -479,17 +604,42 @@ function SortableLessonContentBlockRow({
   return (
     <div
       ref={setNodeRef}
-      style={style}
-      className={cn(
-        "rounded-lg border bg-background shadow-sm overflow-hidden",
-        isDragging ? "opacity-70" : ""
-      )}
+      style={{
+        ...style,
+        borderRadius: "12px",
+        border: "1px solid rgba(27,107,184,0.18)",
+        background: "#ffffff",
+        boxShadow: isDragging
+          ? "0 8px 32px rgba(27,107,184,0.18)"
+          : "0 2px 10px rgba(0,0,0,0.06)",
+        overflow: "hidden",
+        opacity: isDragging ? 0.75 : 1,
+        transition: "box-shadow 200ms, opacity 200ms",
+      }}
     >
-      <div className="flex items-center justify-between gap-2 border-b px-3 py-2 bg-muted/20">
-        <div className="flex items-center gap-2 min-w-0">
+      {/* Styled header matching section-card pattern */}
+      <div
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: "8px",
+          padding: "9px 12px",
+          background: "linear-gradient(135deg, #f0f6ff 0%, #e8effe 100%)",
+          borderBottom: "1px solid rgba(27,107,184,0.12)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+          {/* Drag handle */}
           <button
             type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/40 text-muted-foreground cursor-grab active:cursor-grabbing"
+            style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              width: 28, height: 28, borderRadius: "7px",
+              background: "rgba(27,107,184,0.1)",
+              color: "#1b6bb8",
+              cursor: "grab",
+              border: "none",
+              flexShrink: 0,
+            }}
             title="Drag to reorder"
             aria-label="Drag to reorder"
             {...attributes}
@@ -497,13 +647,46 @@ function SortableLessonContentBlockRow({
           >
             <GripVertical className="h-4 w-4" />
           </button>
-          <div className="text-xs font-semibold text-muted-foreground truncate">Content block {index + 1}</div>
+
+          {/* Block icon badge */}
+          <span style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 26, height: 26, borderRadius: "7px",
+            background: "linear-gradient(135deg, #1b6bb8, #144a8a)",
+            boxShadow: "0 2px 6px rgba(27,107,184,0.3)",
+            fontSize: "13px",
+            flexShrink: 0,
+          }}>
+            📝
+          </span>
+
+          <span style={{ fontWeight: 700, fontSize: "12px", color: "#1b6bb8", letterSpacing: "0.01em" }}>
+            Content block {index + 1}
+          </span>
         </div>
-        <Button type="button" size="icon-sm" variant="ghost" onClick={onRemove} title="Remove content block" aria-label="Remove content block">
-          <Trash2 className="h-4 w-4" />
-        </Button>
+
+        {/* Remove button */}
+        <button
+          type="button"
+          onClick={onRemove}
+          title="Remove content block"
+          aria-label="Remove content block"
+          style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 28, height: 28, borderRadius: "7px",
+            background: "rgba(220,38,38,0.08)",
+            color: "#dc2626",
+            border: "none",
+            cursor: "pointer",
+            flexShrink: 0,
+            transition: "background 150ms",
+          }}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
       </div>
-      <div className="p-3">
+
+      <div style={{ padding: "12px" }}>
         <RichTextEditorWithUploads
           value={block.html}
           onChange={onChangeHtml}
@@ -541,8 +724,26 @@ function StaticTopicRow({
   onDeleteItem: (topicId: string, itemId: string) => void;
 }) {
   return (
-    <div className="rounded-md border bg-muted/10">
-      <div className="flex items-center justify-between gap-2 px-3 py-3 border-b bg-muted/10">
+    <div
+      style={{
+        borderRadius: "12px",
+        border: "1px solid rgba(27,135,85,0.15)",
+        background: "#ffffff",
+        boxShadow: "0 2px 10px rgba(0,0,0,0.06)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "8px",
+          padding: "10px 14px",
+          background: "linear-gradient(135deg, #f0faf6 0%, #e8f5ed 100%)",
+          borderBottom: "1px solid rgba(27,135,85,0.1)",
+        }}
+      >
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-muted-foreground" aria-hidden="true">
             <GripVertical className="h-4 w-4" />
@@ -554,50 +755,77 @@ function StaticTopicRow({
         </div>
 
         <div className="flex items-center gap-1">
-          <Button type="button" variant="ghost" size="icon-sm" onClick={onEdit} title="Edit topic">
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onEdit} title="Edit chapter">
             <Pencil className="h-4 w-4" />
           </Button>
-          <Button type="button" variant="ghost" size="icon-sm" onClick={onDelete} title="Delete topic">
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onDelete} title="Delete chapter">
             <Trash2 className="h-4 w-4" />
           </Button>
-          <Button type="button" variant="ghost" size="icon-sm" onClick={onToggle} title={expanded ? "Collapse topic" : "Expand topic"}>
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onToggle} title={expanded ? "Collapse chapter" : "Expand chapter"}>
             {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </Button>
         </div>
       </div>
 
       {expanded ? (
-        <div className="px-3 py-3 space-y-3">
+        <div className="px-3 py-3 space-y-3" style={{ background: "#fafffe" }}>
           {topic.items.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No content items yet for this topic.</p>
+            <p className="text-xs text-muted-foreground">No content items yet for this chapter.</p>
           ) : (
             <div className="space-y-2">
               {topic.items
                 .slice()
                 .sort((a, b) => a.position - b.position)
-                .map((item) => (
-                  <div key={item.id} className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <GripVertical className="h-4 w-4 text-muted-foreground" />
-                      <p className="text-sm font-medium truncate">{item.title?.trim() || "(untitled)"}</p>
-                      <p className="text-xs text-muted-foreground uppercase ml-2">{item.item_type}</p>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {item.item_type === "lesson" ? (
-                        <Button type="button" variant="ghost" size="icon-sm" onClick={() => onEditLessonItem(topic.id, item)} title="Edit lesson">
-                          <Pencil className="h-4 w-4" />
+                .map((item) => {
+                  const isLesson = item.item_type === "lesson";
+                  return (
+                    <div
+                      key={item.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        borderRadius: "9px",
+                        border: isLesson ? "1px solid rgba(27,107,184,0.18)" : "1px solid rgba(124,58,189,0.18)",
+                        borderLeft: isLesson ? "3px solid #1b6bb8" : "3px solid #7c3abd",
+                        background: "#ffffff",
+                        padding: "8px 12px",
+                        boxShadow: "0 1px 4px rgba(0,0,0,0.05)",
+                        gap: "8px",
+                      }}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <GripVertical className="h-4 w-4 text-muted-foreground" />
+                        <p className="text-sm font-medium truncate">{item.title?.trim() || "(untitled)"}</p>
+                        <span
+                          style={{
+                            fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em",
+                            padding: "2px 7px", borderRadius: "99px",
+                            background: isLesson ? "rgba(27,107,184,0.1)" : "rgba(124,58,189,0.1)",
+                            color: isLesson ? "#1b6bb8" : "#7c3abd",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {item.item_type}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {item.item_type === "lesson" ? (
+                          <Button type="button" variant="ghost" size="icon-sm" onClick={() => onEditLessonItem(topic.id, item)} title="Edit lesson">
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        ) : (
+                          <Button type="button" variant="ghost" size="icon-sm" onClick={() => onEditQuizItem(topic.id, item)} title="Edit quiz">
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        )}
+                        <Button type="button" variant="ghost" size="icon-sm" onClick={() => onDeleteItem(topic.id, item.id)} title="Delete item">
+                          <Trash2 className="h-4 w-4" />
                         </Button>
-                      ) : (
-                        <Button type="button" variant="ghost" size="icon-sm" onClick={() => onEditQuizItem(topic.id, item)} title="Edit quiz">
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                      )}
-                      <Button type="button" variant="ghost" size="icon-sm" onClick={() => onDeleteItem(topic.id, item.id)} title="Delete item">
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
             </div>
           )}
 
@@ -632,8 +860,30 @@ export function CourseEditorV2Form({
   initialTopics: CourseTopic[];
   memberOptions: MemberOption[];
 }) {
+  type MainEditorTab = "information" | "builder";
   const router = useRouter();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+
+  type CertificateTemplateRow = {
+    id: string;
+    course_id: string;
+    storage_bucket: string;
+    storage_path: string;
+    file_name: string;
+    mime_type: string;
+    size_bytes: number;
+  };
+
+  type CertificateSettingsRow = {
+    course_id: string;
+    organization_id: string;
+    enabled: boolean;
+    certificate_title: string;
+    course_passing_grade_percent: number;
+    name_placement_json: CertificateNamePlacement | null;
+    updated_at: string;
+    updated_by: string | null;
+  };
 
   const [courseId, setCourseId] = useState<string | null>(initialCourse?.id ?? null);
   const [status, setStatus] = useState<"draft" | "published">(initialCourse?.status === "published" ? "published" : "draft");
@@ -692,12 +942,27 @@ export function CourseEditorV2Form({
   const [membersOpen, setMembersOpen] = useState(false);
   const [memberSearch, setMemberSearch] = useState("");
 
+  // Certificate (Course Information tab)
+  const [certLoading, setCertLoading] = useState(false);
+  const [certSaving, setCertSaving] = useState(false);
+  const [certTemplate, setCertTemplate] = useState<CertificateTemplateRow | null>(null);
+  const [certEnabled, setCertEnabled] = useState(false);
+  const [certTitle, setCertTitle] = useState("");
+  const [certPassingPercent, setCertPassingPercent] = useState<number>(0);
+  const [certPlacement, setCertPlacement] = useState<CertificateNamePlacement | null>(null);
+  const [certPlacementOpen, setCertPlacementOpen] = useState(false);
+  const [certTplFile, setCertTplFile] = useState<File | null>(null);
+  const [certTplUploading, setCertTplUploading] = useState(false);
+  const [isCertTplDragActive, setIsCertTplDragActive] = useState(false);
+  const certTplInputRef = useRef<HTMLInputElement | null>(null);
+
   const [topics, setTopics] = useState<CourseTopic[]>(initialTopics ?? []);
   const [expandedTopicIds, setExpandedTopicIds] = useState<Set<string>>(new Set());
 
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successModal, setSuccessModal] = useState<{ title: string; description: string } | null>(null);
+  const [activeMainTab, setActiveMainTab] = useState<MainEditorTab>("information");
   const [origin, setOrigin] = useState("");
   const [dndReady, setDndReady] = useState(false);
 
@@ -923,6 +1188,95 @@ export function CourseEditorV2Form({
   useEffect(() => {
     if (status !== "published") setNeedsRepublish(false);
   }, [status]);
+
+  async function loadCertificateSettingsAndTemplate(courseIdToUse: string) {
+    setCertLoading(true);
+    try {
+      const { data: body } = await fetchJson<{ settings: CertificateSettingsRow | null; template: CertificateTemplateRow | null }>(
+        `/api/courses/${courseIdToUse}/certificate-settings`,
+        { cache: "no-store" }
+      );
+      const settings = body.settings ?? null;
+      const tpl = body.template ?? null;
+      setCertTemplate(tpl);
+      setCertEnabled(Boolean(settings?.enabled ?? false));
+      setCertTitle(String(settings?.certificate_title ?? ""));
+      setCertPassingPercent(Number.isFinite(Number(settings?.course_passing_grade_percent)) ? Number(settings?.course_passing_grade_percent) : 0);
+      setCertPlacement((settings?.name_placement_json as CertificateNamePlacement | null) ?? null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load certificate settings.");
+    } finally {
+      setCertLoading(false);
+    }
+  }
+
+  async function saveCertificateSettings(courseIdToUse: string, next: Partial<CertificateSettingsRow>) {
+    setCertSaving(true);
+    try {
+      const payload: Record<string, unknown> = {};
+      if (typeof next.enabled === "boolean") payload.enabled = next.enabled;
+      if (typeof next.certificate_title === "string") payload.certificate_title = next.certificate_title;
+      if (typeof next.course_passing_grade_percent === "number") payload.course_passing_grade_percent = next.course_passing_grade_percent;
+      if ("name_placement_json" in next) payload.name_placement_json = next.name_placement_json ?? null;
+
+      const { data: body } = await fetchJson<{ settings: CertificateSettingsRow }>(`/api/courses/${courseIdToUse}/certificate-settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const s = body.settings;
+      setCertEnabled(Boolean(s.enabled));
+      setCertTitle(String(s.certificate_title ?? ""));
+      setCertPassingPercent(Number.isFinite(Number(s.course_passing_grade_percent)) ? Number(s.course_passing_grade_percent) : 0);
+      setCertPlacement((s.name_placement_json as CertificateNamePlacement | null) ?? null);
+
+      if (status === "published") setNeedsRepublish(true);
+      toast.success("Certificate settings saved.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save certificate settings.");
+    } finally {
+      setCertSaving(false);
+    }
+  }
+
+  async function uploadCertificateTemplate(courseIdToUse: string, file: File) {
+    setCertTplUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      await fetchJson<Record<string, unknown>>(`/api/courses/${courseIdToUse}/certificate-template`, { method: "POST", body: form });
+      setCertTplFile(null);
+      await loadCertificateSettingsAndTemplate(courseIdToUse);
+      toast.success("Certificate template uploaded.");
+      if (status === "published") setNeedsRepublish(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to upload certificate template.");
+    } finally {
+      setCertTplUploading(false);
+      setIsCertTplDragActive(false);
+    }
+  }
+
+  async function deleteCertificateTemplate(courseIdToUse: string) {
+    setCertTplUploading(true);
+    try {
+      await fetchJson<Record<string, unknown>>(`/api/courses/${courseIdToUse}/certificate-template`, { method: "DELETE" });
+      await loadCertificateSettingsAndTemplate(courseIdToUse);
+      toast.success("Certificate template removed.");
+      if (status === "published") setNeedsRepublish(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to remove certificate template.");
+    } finally {
+      setCertTplUploading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!courseId) return;
+    void loadCertificateSettingsAndTemplate(courseId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseId]);
 
   useEffect(() => {
     function onBeforeUnload(e: BeforeUnloadEvent) {
@@ -1776,14 +2130,14 @@ export function CourseEditorV2Form({
           ...prev,
           {
             id: newTopicId,
-            title: topicModal.title.trim() || "New topic",
+            title: topicModal.title.trim() || "New chapter",
             summary: topicModal.summary?.trim() || null,
             position: prev.length,
             items: [],
           },
         ]);
         setTopicExpanded(newTopicId, true);
-        toast.info("Topic added locally. Click Save Draft or Publish/Republish to apply changes.");
+        toast.info("Chapter added locally. Click Save Draft or Publish/Republish to apply changes.");
       } else if (topicModal.topicId) {
         setTopics((prev) =>
           prev.map((t) =>
@@ -1792,16 +2146,16 @@ export function CourseEditorV2Form({
               : t
           )
         );
-        toast.info("Topic updated locally. Click Save Draft or Publish/Republish to apply changes.");
+        toast.info("Chapter updated locally. Click Save Draft or Publish/Republish to apply changes.");
       }
       setTopicModal(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save topic.");
+      setError(e instanceof Error ? e.message : "Failed to save chapter.");
     }
   }
 
   async function deleteTopic(topicId: string) {
-    if (!confirm("Delete this topic and all content inside it?")) return;
+    if (!confirm("Delete this chapter and all content inside it?")) return;
     setError(null);
     setIsBusy(true);
     try {
@@ -1811,9 +2165,9 @@ export function CourseEditorV2Form({
         setPendingDeletedTopicIds((prev) => (prev.includes(topicId) ? prev : [...prev, topicId]));
       }
       if (status === "published") setNeedsRepublish(true);
-      toast.info("Topic removed locally. Click Save Draft or Publish/Republish to apply changes.");
+      toast.info("Chapter removed locally. Click Save Draft or Publish/Republish to apply changes.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to delete topic.");
+      setError(e instanceof Error ? e.message : "Failed to delete chapter.");
     } finally {
       setIsBusy(false);
     }
@@ -2073,8 +2427,13 @@ export function CourseEditorV2Form({
   }
 
   return (
-    <div className="mx-auto w-full space-y-5">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-lg border bg-card px-4 py-3 shadow-sm">
+    <div
+      className="cb-form mx-auto w-full space-y-5"
+      style={{ minHeight: "100vh", background: "linear-gradient(160deg, #f0fdf7 0%, #ffffff 45%, #f4f9ff 100%)" }}
+    >
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border bg-white px-4 py-3"
+        style={{ boxShadow: "0 2px 16px rgba(27,135,85,0.1)", borderColor: "rgba(27,135,85,0.15)" }}
+      >
         <div className="text-sm text-muted-foreground">
           Course Builder <span className="font-medium text-foreground">V2</span> ({status})
         </div>
@@ -2155,10 +2514,89 @@ export function CourseEditorV2Form({
         </div>
       ) : null}
 
-      <DetailsSection title="Course Info">
-        <div className="space-y-4">
+      <div
+        style={{
+          background: "linear-gradient(135deg, #c8edd8 0%, #b3e5c4 50%, #a5deb8 100%)",
+          borderRadius: "18px",
+          padding: "10px",
+          boxShadow: "0 6px 24px rgba(27,135,85,0.18), 0 2px 8px rgba(0,0,0,0.06)",
+        }}
+      >
+        <div className="grid grid-cols-2 gap-3">
+          {/* Course Information Tab */}
+          <button
+            type="button"
+            onClick={() => setActiveMainTab("information")}
+            style={activeMainTab === "information" ? {
+              background: "linear-gradient(135deg, #53a47f 0%, #3d9e6d 50%, #1b8755 100%)",
+              backgroundSize: "200% 200%",
+              animation: "cb-gradient-shift 8s ease infinite",
+              boxShadow: "0 8px 24px rgba(27,135,85,0.4), 0 2px 8px rgba(0,0,0,0.12)",
+              border: "1px solid rgba(255,255,255,0.35)",
+              color: "#ffffff",
+              borderRadius: "12px",
+              padding: "14px 18px",
+              textAlign: "left",
+              cursor: "pointer",
+              transform: "translateY(-1px)",
+              width: "100%",
+            } : {
+              background: "rgba(255,255,255,0.82)",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+              border: "1px solid rgba(255,255,255,0.6)",
+              color: "#374151",
+              borderRadius: "12px",
+              padding: "14px 18px",
+              textAlign: "left",
+              cursor: "pointer",
+              width: "100%",
+              opacity: 0.85,
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: "14px", marginBottom: "3px" }}>📋 Course Information</div>
+            <div style={{ fontSize: "11px", opacity: 0.8 }}>General setup, metadata, access and publishing settings.</div>
+          </button>
+
+          {/* Course Builder Tab */}
+          <button
+            type="button"
+            onClick={() => setActiveMainTab("builder")}
+            style={activeMainTab === "builder" ? {
+              background: "linear-gradient(135deg, #0e4d2c 0%, #1b6b3a 50%, #2d8f52 100%)",
+              backgroundSize: "200% 200%",
+              animation: "cb-gradient-shift 8s ease infinite",
+              boxShadow: "0 8px 24px rgba(14,77,44,0.45), 0 2px 8px rgba(0,0,0,0.12)",
+              border: "1px solid rgba(255,255,255,0.25)",
+              color: "#ffffff",
+              borderRadius: "12px",
+              padding: "14px 18px",
+              textAlign: "left",
+              cursor: "pointer",
+              transform: "translateY(-1px)",
+              width: "100%",
+            } : {
+              background: "rgba(255,255,255,0.82)",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+              border: "1px solid rgba(255,255,255,0.6)",
+              color: "#374151",
+              borderRadius: "12px",
+              padding: "14px 18px",
+              textAlign: "left",
+              cursor: "pointer",
+              width: "100%",
+              opacity: 0.85,
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: "14px", marginBottom: "3px" }}>🏗️ Course Builder</div>
+            <div style={{ fontSize: "11px", opacity: 0.8 }}>Build chapters, lessons and quizzes in your learning flow.</div>
+          </button>
+        </div>
+      </div>
+
+      {activeMainTab === "information" ? <DetailsSection title="Course Info">
+        <div className="space-y-6">
           <div>
-            <label className="text-sm font-medium">Course Title</label>
+            <FieldLabel>Course Title</FieldLabel>
             <Input
             value={title}
             onChange={(e) => {
@@ -2170,13 +2608,12 @@ export function CourseEditorV2Form({
               }
             }}
               placeholder="Enter a clear course name (e.g. WordPress SEO Fundamentals)"
-              className="mt-1"
             />
             <FieldHint>This is the main course title shown to learners in course listings and on the course page.</FieldHint>
           </div>
 
           <div>
-            <label className="text-sm font-medium">Course Slug</label>
+            <FieldLabel>Course Slug</FieldLabel>
             <Input
             value={slug}
             onChange={(e) => {
@@ -2192,7 +2629,6 @@ export function CourseEditorV2Form({
                 if (status === "published") setNeedsRepublish(true);
             }}
             placeholder="course-url-slug"
-              className="mt-1"
             />
             <FieldHint>Lowercase letters, numbers and dashes only.</FieldHint>
           </div>
@@ -2203,7 +2639,7 @@ export function CourseEditorV2Form({
           </div>
 
           <div>
-            <p className="mb-2 text-sm font-medium">About Course</p>
+            <FieldLabel>About Course</FieldLabel>
             <RichTextEditorWithUploads
               value={aboutHtml}
               onChange={(html) => {
@@ -2225,7 +2661,7 @@ export function CourseEditorV2Form({
           </div>
 
           <div>
-            <p className="mb-2 text-sm font-medium">Excerpt</p>
+            <FieldLabel>Excerpt</FieldLabel>
             <Textarea
               value={excerpt}
               onChange={(e) => {
@@ -2241,14 +2677,14 @@ export function CourseEditorV2Form({
             </div>
           </div>
         </div>
-      </DetailsSection>
+      </DetailsSection> : null}
 
-      <DetailsSection title="Video">
-        <div className="space-y-4">
+      {activeMainTab === "information" ? <DetailsSection title="Video">
+        <div className="space-y-6">
           <div>
-            <label className="text-sm font-medium">Course Intro Video</label>
+            <FieldLabel accent="#1b6bb8">Course Intro Video</FieldLabel>
             <select
-              className="mt-1 h-10 w-full rounded-md border bg-transparent px-3 text-sm"
+              className="h-10 w-full rounded-md border bg-transparent px-3 text-sm"
               value={videoProvider}
               onChange={(e) => {
                 setVideoProvider(e.target.value as "html5" | "youtube" | "vimeo");
@@ -2310,7 +2746,7 @@ export function CourseEditorV2Form({
             </div>
           ) : (
             <div>
-              <label className="text-sm font-medium">External URL</label>
+              <FieldLabel accent="#1b6bb8">External URL</FieldLabel>
               <div className="mt-2 rounded-md border border-dashed border-primary bg-muted/10 p-4">
                 <Input
                   value={videoUrl}
@@ -2325,9 +2761,9 @@ export function CourseEditorV2Form({
             </div>
           )}
         </div>
-      </DetailsSection>
+      </DetailsSection> : null}
 
-      <DetailsSection title="Course Thumbnail">
+      {activeMainTab === "information" ? <DetailsSection title="Course Thumbnail">
         <div className="flex flex-col md:flex-row gap-4">
           <div className="w-full md:w-[300px]">
             <div
@@ -2409,9 +2845,9 @@ export function CourseEditorV2Form({
             </Button>
           </div>
         </div>
-      </DetailsSection>
+      </DetailsSection> : null}
 
-      <DetailsSection title="Course Settings">
+      {activeMainTab === "information" ? <DetailsSection title="Course Settings">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="md:col-span-1 rounded-md border bg-muted/10 p-3">
             <div className="flex items-center gap-2 rounded-md bg-background border px-3 py-2 text-sm font-medium">
@@ -2419,9 +2855,9 @@ export function CourseEditorV2Form({
               General
             </div>
           </div>
-          <div className="md:col-span-2 space-y-5">
+          <div className="md:col-span-2 space-y-6">
             <div className="relative">
-              <label className="text-sm font-medium">Members</label>
+              <FieldLabel accent="#b87216">Members</FieldLabel>
               <button
                 type="button"
                 className="mt-1 w-full h-10 rounded-md border bg-background px-3 text-left text-sm flex items-center justify-between hover:bg-muted/10 transition-colors cursor-pointer"
@@ -2560,9 +2996,9 @@ export function CourseEditorV2Form({
             </div>
 
             <div>
-              <label className="text-sm font-medium">Difficulty Level</label>
+              <FieldLabel accent="#b87216">Difficulty Level</FieldLabel>
               <select
-                className="mt-1 h-10 w-full rounded-md border bg-transparent px-3 text-sm"
+                className="h-10 w-full rounded-md border bg-transparent px-3 text-sm"
                 value={difficulty ?? "all_levels"}
                 onChange={(e) => {
                   setDifficulty(e.target.value as CourseV2["difficulty_level"]);
@@ -2578,9 +3014,9 @@ export function CourseEditorV2Form({
             </div>
           </div>
         </div>
-      </DetailsSection>
+      </DetailsSection> : null}
 
-      <DetailsSection title="Course Builder">
+      {activeMainTab === "builder" ? <DetailsSection title="Course Builder">
         <div className="space-y-3">
           {dndReady ? (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(e) => void onTopicDragEnd(e)}>
@@ -2701,9 +3137,8 @@ export function CourseEditorV2Form({
             </div>
           )}
 
-          <Button
+          <button
             type="button"
-            size="sm"
             onClick={() =>
               setTopicModal({
                 mode: "create",
@@ -2712,20 +3147,37 @@ export function CourseEditorV2Form({
                 summary: "",
               })
             }
-            className="w-fit"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "8px",
+              borderRadius: "10px",
+              border: "1.5px solid rgba(27,135,85,0.28)",
+              background: "rgba(27,135,85,0.05)",
+              padding: "8px 18px",
+              fontSize: "13px", fontWeight: 700, color: "#1b8755",
+              cursor: "pointer",
+              boxShadow: "0 1px 4px rgba(27,135,85,0.1)",
+              transition: "all 150ms",
+            }}
           >
-            <Plus className="h-4 w-4" />
-            Add new topic
-          </Button>
+            <span style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              width: 22, height: 22, borderRadius: "6px",
+              background: "linear-gradient(135deg, #1b8755, #0e4d2c)",
+              boxShadow: "0 2px 6px rgba(27,135,85,0.35)",
+              flexShrink: 0,
+            }}>
+              <Plus className="h-3.5 w-3.5 text-white" />
+            </span>
+            Add new chapter
+          </button>
         </div>
-      </DetailsSection>
+      </DetailsSection> : null}
 
-      <DetailsSection title="Additional Data">
-        <div className="space-y-5">
+      {activeMainTab === "information" ? <DetailsSection title="Additional Data">
+        <div className="space-y-6">
           <div>
-            <label className="text-sm font-medium">What Will I Learn?</label>
+            <FieldLabel accent="#1e6b8c">What Will I Learn?</FieldLabel>
             <Textarea
-              className="mt-1"
               value={whatWillLearn}
               onChange={(e) => {
                 setWhatWillLearn(e.target.value);
@@ -2737,8 +3189,8 @@ export function CourseEditorV2Form({
           </div>
 
           <div>
-            <label className="text-sm font-medium">Total Course Duration</label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-1">
+            <FieldLabel accent="#1e6b8c">Total Course Duration</FieldLabel>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <Input
                   type="number"
@@ -2771,9 +3223,8 @@ export function CourseEditorV2Form({
           </div>
 
           <div>
-            <label className="text-sm font-medium">Materials Included</label>
+            <FieldLabel accent="#1e6b8c">Materials Included</FieldLabel>
             <Textarea
-              className="mt-1"
               value={materialsIncluded}
               onChange={(e) => {
                 setMaterialsIncluded(e.target.value);
@@ -2785,9 +3236,8 @@ export function CourseEditorV2Form({
           </div>
 
           <div>
-            <label className="text-sm font-medium">Requirements/Instructions</label>
+            <FieldLabel accent="#1e6b8c">Requirements/Instructions</FieldLabel>
             <Textarea
-              className="mt-1"
               value={requirements}
               onChange={(e) => {
                 setRequirements(e.target.value);
@@ -2798,34 +3248,314 @@ export function CourseEditorV2Form({
             <FieldHint>Use this field to list prerequisites, setup, or mandatory learner instructions.</FieldHint>
           </div>
         </div>
-      </DetailsSection>
+      </DetailsSection> : null}
+
+      {activeMainTab === "information" ? (
+        <DetailsSection title="Certificate">
+          <div className="space-y-6">
+            {!courseId ? (
+              <div className="rounded-lg border bg-muted/20 p-4 text-sm text-muted-foreground">
+                Create the course draft first to configure the certificate.
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-background p-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: 30,
+                          height: 30,
+                          borderRadius: "10px",
+                          background: "linear-gradient(135deg, #1b8755, #0e4d2c)",
+                          boxShadow: "0 2px 10px rgba(27,135,85,0.28)",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <Award className="h-4 w-4 text-white" />
+                      </span>
+                      <div className="font-semibold text-foreground">Auto-grant certificates</div>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      When enabled, learners receive a certificate automatically after they meet the course passing grade based on their best quiz attempts.
+                    </div>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm font-medium">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-primary"
+                      checked={certEnabled}
+                      onChange={(e) => setCertEnabled(e.target.checked)}
+                      disabled={certLoading || certSaving}
+                    />
+                    Enabled
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                  <div className="space-y-6">
+                    <div>
+                      <FieldLabel>Certificate Title</FieldLabel>
+                      <Input
+                        value={certTitle}
+                        onChange={(e) => setCertTitle(e.target.value)}
+                        placeholder="e.g. Certificate of Completion"
+                        disabled={certLoading || certSaving}
+                      />
+                      <FieldHint>Displayed in the Certificates area and used as the default generated file name.</FieldHint>
+                    </div>
+
+                    <div>
+                      <FieldLabel>Course Passing Grade (%)</FieldLabel>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={certPassingPercent}
+                        onChange={(e) => setCertPassingPercent(Math.max(0, Math.min(100, Number(e.target.value || 0))))}
+                        placeholder="0"
+                        disabled={certLoading || certSaving}
+                      />
+                      <FieldHint>
+                        Calculated across all required quizzes using the learner’s best attempt for each quiz (points-weighted). Set 0 to disable auto-granting.
+                      </FieldHint>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          if (!courseId) return;
+                          void saveCertificateSettings(courseId, {
+                            enabled: certEnabled,
+                            certificate_title: certTitle,
+                            course_passing_grade_percent: certPassingPercent,
+                            name_placement_json: certPlacement,
+                          });
+                        }}
+                        disabled={!courseId || certLoading || certSaving}
+                        className="gap-2"
+                      >
+                        {certSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                        Save certificate settings
+                      </Button>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          if (!courseId) return;
+                          void loadCertificateSettingsAndTemplate(courseId);
+                        }}
+                        disabled={!courseId || certLoading || certSaving}
+                      >
+                        Refresh
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-xl border bg-background p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-foreground">Template file</div>
+                          <div className="text-xs text-muted-foreground">Upload a PDF or image template (max 10MB).</div>
+                        </div>
+                        {certTemplate ? (
+                          <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
+                            {certTemplate.mime_type === "application/pdf" ? "PDF" : "Image"}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {certTemplate ? (
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-4">
+                          <div className="rounded-lg border overflow-hidden bg-muted/10">
+                            {certTemplate.mime_type.startsWith("image/") ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                alt="Certificate template preview"
+                                src={`/api/courses/${courseId}/certificate-template?download=1`}
+                                className="h-[140px] w-full object-cover"
+                              />
+                            ) : (
+                              <div className="h-[140px] w-full flex items-center justify-center">
+                                <FileText className="h-10 w-10 text-muted-foreground" />
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-foreground truncate">{certTemplate.file_name}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {certTemplate.mime_type} • {Math.round((certTemplate.size_bytes / (1024 * 1024)) * 10) / 10} MB
+                            </div>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="gap-2"
+                                onClick={() => window.open(`/api/courses/${courseId}/certificate-template?download=1`, "_blank", "noopener,noreferrer")}
+                              >
+                                <Eye className="h-4 w-4" />
+                                Preview
+                              </Button>
+
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="gap-2"
+                                onClick={() => setCertPlacementOpen(true)}
+                              >
+                                🧲 Place member name
+                              </Button>
+
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={certTplUploading}
+                                onClick={() => void deleteCertificateTemplate(courseId)}
+                              >
+                                {certTplUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                Remove
+                              </Button>
+                            </div>
+
+                            <div className="mt-3 text-xs">
+                              {certPlacement ? (
+                                <span className="text-foreground">
+                                  Name placement set (page {certPlacement.page}, x {Math.round(certPlacement.xPct * 100)}%, y {Math.round(certPlacement.yPct * 100)}%).
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">No name placement set yet. Click “Place member name”.</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => certTplInputRef.current?.click()}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              certTplInputRef.current?.click();
+                            }
+                          }}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            setIsCertTplDragActive(true);
+                          }}
+                          onDragLeave={() => setIsCertTplDragActive(false)}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setIsCertTplDragActive(false);
+                            const f = e.dataTransfer.files?.[0] ?? null;
+                            if (f) setCertTplFile(f);
+                          }}
+                          className={cn(
+                            "mt-3 rounded-lg border border-dashed p-8 text-center cursor-pointer transition-colors",
+                            isCertTplDragActive ? "border-primary bg-primary/5" : "bg-muted/10"
+                          )}
+                        >
+                          <div className="text-sm font-semibold text-foreground">Drag & drop your certificate template</div>
+                          <div className="mt-1 text-xs text-muted-foreground">PDF, PNG, JPG, WebP • Max 10MB</div>
+                          <div className="mt-4 inline-flex items-center gap-2 rounded-md border bg-background px-3 py-2 text-xs font-semibold text-foreground">
+                            <Upload className="h-4 w-4" />
+                            Browse file
+                          </div>
+                          {certTplFile ? (
+                            <div className="mt-3 text-xs text-muted-foreground">Selected: {certTplFile.name}</div>
+                          ) : null}
+                        </div>
+                      )}
+
+                      <input
+                        ref={certTplInputRef}
+                        type="file"
+                        accept="application/pdf,image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        onChange={(e) => setCertTplFile(e.target.files?.[0] ?? null)}
+                      />
+
+                      <div className="mt-3 flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={!courseId || !certTplFile || certTplUploading}
+                          onClick={() => {
+                            if (!courseId || !certTplFile) return;
+                            void uploadCertificateTemplate(courseId, certTplFile);
+                          }}
+                          className="gap-2"
+                        >
+                          {certTplUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                          Upload template
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {courseId && certTemplate ? (
+                  <CertificatePlacementModal
+                    open={certPlacementOpen}
+                    templateMime={certTemplate.mime_type}
+                    templateDownloadUrl={`/api/courses/${courseId}/certificate-template?download=1`}
+                    initialPlacement={certPlacement}
+                    onClose={() => setCertPlacementOpen(false)}
+                    onSave={(p) => {
+                      setCertPlacementOpen(false);
+                      setCertPlacement(p);
+                      void saveCertificateSettings(courseId, { name_placement_json: p });
+                    }}
+                  />
+                ) : null}
+              </>
+            )}
+
+            {certLoading ? (
+              <div className="text-xs text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Loading certificate configuration…
+              </div>
+            ) : null}
+          </div>
+        </DetailsSection>
+      ) : null}
 
       {topicModal ? (
         <div className="fixed inset-0 z-1000 bg-black/50 p-4 sm:p-6 overflow-y-auto">
           <div className="min-h-[calc(100svh-2rem)] sm:min-h-[calc(100svh-3rem)] flex items-center justify-center">
             <div className="w-full max-w-xl rounded-lg border bg-card shadow-xl">
             <div className="flex items-center justify-between border-b px-4 py-3">
-              <h3 className="font-semibold">{topicModal.mode === "create" ? "Add Topic" : "Edit Topic"}</h3>
+              <h3 className="font-semibold">{topicModal.mode === "create" ? "Add Chapter" : "Edit Chapter"}</h3>
               <Button type="button" size="icon-sm" variant="ghost" onClick={() => setTopicModal(null)}>
                 <X className="h-4 w-4" />
               </Button>
             </div>
-            <div className="p-4 space-y-3">
+            <div className="p-4 space-y-4">
               <div>
-                <label className="text-sm font-medium">Topic Name</label>
+                <FieldLabel>Chapter Name</FieldLabel>
                 <Input
                   value={topicModal.title}
                   onChange={(e) => setTopicModal((prev) => (prev ? { ...prev, title: e.target.value } : prev))}
-                  placeholder="Name this topic for your internal course structure"
+                  placeholder="Name this chapter for your internal course structure"
                 />
-                <FieldHint>This topic name is visible to creators in the builder and helps organize course flow.</FieldHint>
+                <FieldHint>This chapter name is visible to creators in the builder and helps organize course flow.</FieldHint>
               </div>
               <div>
-                <label className="text-sm font-medium">Topic Summary</label>
+                <FieldLabel>Chapter Summary</FieldLabel>
                 <Textarea
                   value={topicModal.summary}
                   onChange={(e) => setTopicModal((prev) => (prev ? { ...prev, summary: e.target.value } : prev))}
-                  placeholder="Write a short summary for this topic"
+                  placeholder="Write a short summary for this chapter"
                   className="min-h-[120px]"
                 />
                 <FieldHint>Optional summary used in builder previews and internal planning.</FieldHint>
@@ -2837,7 +3567,7 @@ export function CourseEditorV2Form({
               </Button>
               <Button type="button" onClick={() => void createOrUpdateTopic()} disabled={isBusy || topicModal.title.trim().length < 2}>
                 {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {topicModal.mode === "create" ? "Add Topic" : "Save Topic"}
+                {topicModal.mode === "create" ? "Add Chapter" : "Save Chapter"}
               </Button>
             </div>
             </div>
@@ -2911,9 +3641,8 @@ export function CourseEditorV2Form({
             <div className="p-4 space-y-6 max-h-[75vh] overflow-auto">
               <>
                   <div>
-                    <label className="text-sm font-medium">Lesson Name</label>
+                    <FieldLabel accent="#1b6bb8">Lesson Name</FieldLabel>
                     <Input
-                      className="mt-1"
                       value={itemModal.lessonName}
                       onChange={(e) =>
                         setItemModal((prev) => (prev && prev.itemType === "lesson" ? { ...prev, lessonName: e.target.value } : prev))
@@ -2924,7 +3653,7 @@ export function CourseEditorV2Form({
                   </div>
 
                   <div>
-                    <label className="text-sm font-medium">Lesson Content</label>
+                    <FieldLabel accent="#1b6bb8">Lesson Content</FieldLabel>
                     <div className="mt-2 rounded-lg border bg-muted/10 p-4 space-y-3">
                       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onLessonBlocksDragEnd}>
                         <SortableContext
@@ -2975,7 +3704,7 @@ export function CourseEditorV2Form({
                   </div>
 
                   <div>
-                    <label className="text-sm font-medium">Feature Image</label>
+                    <FieldLabel accent="#7c3abd">Feature Image</FieldLabel>
                     <div className="mt-2 rounded-md border p-4 flex flex-col md:flex-row gap-4">
                       <div className="w-full md:w-[300px]">
                         {(() => {
@@ -3077,7 +3806,7 @@ export function CourseEditorV2Form({
                   </div>
 
                   <div>
-                    <label className="text-sm font-medium">Video Source</label>
+                    <FieldLabel accent="#1b6bb8">Video Source</FieldLabel>
                     <div className="mt-2 space-y-3">
                       <select
                         className="h-10 w-full rounded-md border bg-transparent px-3 text-sm"
@@ -3137,8 +3866,8 @@ export function CourseEditorV2Form({
                   </div>
 
                   <div>
-                    <label className="text-sm font-medium">Video playback time</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
+                    <FieldLabel accent="#1b6bb8">Video playback time</FieldLabel>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
                         <Input
                           type="number"
@@ -3176,7 +3905,7 @@ export function CourseEditorV2Form({
                   </div>
 
                   <div>
-                    <label className="text-sm font-medium">Upload exercise files to the Lesson</label>
+                    <FieldLabel accent="#1b6bb8">Upload exercise files to the Lesson</FieldLabel>
                     <div className="mt-2 flex items-center gap-3">
                       <Input
                         id="lesson-attachments-input"

@@ -413,7 +413,7 @@ export function RichTextEditor({
   }
 
   return (
-    <div className={cn("rounded-md border bg-background", className)}>
+    <div className={cn("rt-editor rounded-md border bg-background", className)}>
       <div className="flex items-center gap-1 border-b p-2 flex-wrap">
         <select
           value={blockTag ?? "p"}

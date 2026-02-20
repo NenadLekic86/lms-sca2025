@@ -75,4 +75,20 @@
   
   /* Radius */
   --radius: var(--brand-radius);
+
+  /* Course Builder V2 tab visuals (derived, do not override brand colors) */
+  --cb-tabs-info-gradient: linear-gradient(135deg, #53a47f 0%, #51a875 45%, #1b8755 100%);
+  --cb-tabs-builder-gradient: linear-gradient(135deg, #0b3d23 0%, #0e4d2c 50%, #156a41 100%);
+  --cb-glass-bg: rgba(255, 255, 255, 0.66);
+  --cb-glass-border: rgba(255, 255, 255, 0.38);
+  --cb-glass-shadow: 0 12px 30px rgba(0, 0, 0, 0.1);
+  --cb-tab-text-on-gradient: #ffffff;
+  --cb-tab-text-muted: color-mix(in srgb, var(--foreground) 72%, transparent);
+}
+
+.dark {
+  --cb-glass-bg: rgba(17, 24, 39, 0.56);
+  --cb-glass-border: rgba(255, 255, 255, 0.12);
+  --cb-glass-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+  --cb-tab-text-muted: color-mix(in srgb, var(--foreground) 82%, transparent);
 }

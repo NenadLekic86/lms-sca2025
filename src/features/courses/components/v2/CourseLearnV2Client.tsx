@@ -633,7 +633,7 @@ export function CourseLearnV2Client({
                                   isOpen ? "text-primary" : "text-foreground"
                                 )}
                               >
-                                Current Topic
+                                Current Chapter
                               </div>
                               <div className={cn("text-sm font-semibold truncate", isOpen ? "text-primary" : "text-muted-foreground")}>
                                 {t.title}

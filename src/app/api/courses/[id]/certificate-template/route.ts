@@ -61,16 +61,13 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
 
     if (!cert?.id) return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   } else if (caller.role === "organization_admin") {
+    // Allow org admins to preview/download the template for courses in their organization.
     if (!caller.organization_id) return apiError("FORBIDDEN", "Forbidden", { status: 403 });
-    const { data: cert } = await admin
-      .from("certificates")
-      .select("id")
-      .eq("course_id", id)
-      .eq("organization_id", caller.organization_id)
-      .limit(1)
-      .maybeSingle();
-
-    if (!cert?.id) return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+    const { data: courseRow } = await admin.from("courses").select("id, organization_id").eq("id", id).maybeSingle();
+    const courseOrgId = courseRow && typeof (courseRow as { organization_id?: unknown }).organization_id === "string"
+      ? String((courseRow as { organization_id: string }).organization_id)
+      : null;
+    if (!courseOrgId || courseOrgId !== caller.organization_id) return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   } else if (!["super_admin", "system_admin"].includes(caller.role)) {
     return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }

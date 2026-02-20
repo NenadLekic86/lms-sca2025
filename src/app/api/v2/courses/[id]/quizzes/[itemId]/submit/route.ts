@@ -313,6 +313,137 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     return apiError("INTERNAL", "Failed to update quiz state.", { status: 500 });
   }
 
+  // Best-effort: auto-issue course certificate if configured + learner passed course threshold.
+  // IMPORTANT: do not fail the request after the attempt is saved (member would be stuck).
+  try {
+    const [{ data: certSettings }, { data: certTemplate }] = await Promise.all([
+      admin
+        .from("course_certificate_settings")
+        .select("enabled, course_passing_grade_percent, name_placement_json")
+        .eq("course_id", courseId)
+        .maybeSingle(),
+      admin
+        .from("course_certificate_templates")
+        .select("id")
+        .eq("course_id", courseId)
+        .maybeSingle(),
+    ]);
+
+    const enabled = Boolean(certSettings?.enabled ?? false);
+    const threshold =
+      certSettings && Number.isFinite(Number((certSettings as { course_passing_grade_percent?: unknown }).course_passing_grade_percent))
+        ? Math.max(0, Math.min(100, Math.floor(Number((certSettings as { course_passing_grade_percent: number }).course_passing_grade_percent))))
+        : 0;
+    const placementOk = Boolean(certSettings && (certSettings as { name_placement_json?: unknown }).name_placement_json);
+    const templateOk = Boolean(certTemplate?.id);
+
+    if (enabled && threshold > 0 && placementOk && templateOk) {
+      // Determine which quizzes count toward the course grade:
+      // Prefer required quizzes; if none are marked required, fall back to all quizzes.
+      const { data: quizItems } = await admin
+        .from("course_topic_items")
+        .select("id, is_required")
+        .eq("course_id", courseId)
+        .eq("item_type", "quiz");
+
+      const allQuizIds = (Array.isArray(quizItems) ? quizItems : [])
+        .map((x) => (x && typeof (x as { id?: unknown }).id === "string" ? String((x as { id: string }).id) : ""))
+        .filter(Boolean);
+      const requiredQuizIds = (Array.isArray(quizItems) ? quizItems : [])
+        .filter((x) => Boolean((x as { is_required?: unknown }).is_required ?? false))
+        .map((x) => (x && typeof (x as { id?: unknown }).id === "string" ? String((x as { id: string }).id) : ""))
+        .filter(Boolean);
+
+      const quizIds = requiredQuizIds.length ? requiredQuizIds : allQuizIds;
+      if (quizIds.length > 0) {
+        const { data: results } = await admin
+          .from("course_v2_quiz_attempt_results")
+          .select("item_id, earned_points, total_points, score_percent, graded_at")
+          .eq("course_id", courseId)
+          .eq("user_id", caller.id)
+          .in("item_id", quizIds);
+
+        type Row = { item_id?: string; earned_points?: number; total_points?: number; score_percent?: number; graded_at?: string };
+        const bestByItem = new Map<string, Row>();
+        for (const r of (Array.isArray(results) ? (results as Row[]) : [])) {
+          const itemId2 = typeof r.item_id === "string" ? r.item_id : "";
+          if (!itemId2) continue;
+          const score = Number.isFinite(Number(r.score_percent)) ? Number(r.score_percent) : -1;
+          const gradedAt = typeof r.graded_at === "string" ? r.graded_at : "";
+          const prev = bestByItem.get(itemId2);
+          if (!prev) {
+            bestByItem.set(itemId2, r);
+            continue;
+          }
+          const prevScore = Number.isFinite(Number(prev.score_percent)) ? Number(prev.score_percent) : -1;
+          const prevAt = typeof prev.graded_at === "string" ? prev.graded_at : "";
+          if (score > prevScore) bestByItem.set(itemId2, r);
+          else if (score === prevScore && gradedAt && (!prevAt || gradedAt > prevAt)) bestByItem.set(itemId2, r);
+        }
+
+        // Gate: all required quizzes must have a best result before awarding.
+        const requiredGateIds = requiredQuizIds.length ? requiredQuizIds : quizIds;
+        const missingRequired = requiredGateIds.some((qid) => !bestByItem.has(qid));
+        if (!missingRequired) {
+          let earnedSum = 0;
+          let totalSum = 0;
+          for (const qid of quizIds) {
+            const r = bestByItem.get(qid);
+            if (!r) continue;
+            const earned = Number.isFinite(Number(r.earned_points)) ? Math.max(0, Math.floor(Number(r.earned_points))) : 0;
+            const total = Number.isFinite(Number(r.total_points)) ? Math.max(0, Math.floor(Number(r.total_points))) : 0;
+            earnedSum += earned;
+            totalSum += total;
+          }
+          const coursePercent = totalSum > 0 ? Math.round((earnedSum / totalSum) * 100) : 0;
+
+          if (coursePercent >= threshold) {
+            const now2 = new Date().toISOString();
+            const { data: existingCert } = await admin
+              .from("certificates")
+              .select("id")
+              .eq("user_id", caller.id)
+              .eq("course_id", courseId)
+              .maybeSingle();
+
+            if (!existingCert?.id) {
+              await admin
+                .from("certificates")
+                .upsert(
+                  {
+                    organization_id: caller.organization_id,
+                    user_id: caller.id,
+                    course_id: courseId,
+                    issued_at: now2,
+                    status: "valid",
+                    expires_at: null,
+                    source_attempt_id: null,
+                    course_score_percent: coursePercent,
+                    template_id: certTemplate?.id ?? null,
+                    generated_at: null,
+                    storage_bucket: null,
+                    storage_path: null,
+                    file_name: null,
+                    mime_type: null,
+                    size_bytes: null,
+                  },
+                  { onConflict: "user_id,course_id" }
+                );
+            } else {
+              // Keep issued_at stable; refresh score/template for reporting.
+              await admin
+                .from("certificates")
+                .update({ course_score_percent: coursePercent, template_id: certTemplate?.id ?? null })
+                .eq("id", existingCert.id);
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore (certificate issuance is best-effort)
+  }
+
   return apiOk(
     {
       attempt_id: attempt.id,

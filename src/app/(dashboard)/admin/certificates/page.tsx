@@ -85,8 +85,8 @@ export default async function CertificatesPage() {
 
     const orgLabel = (o?.name ?? "").trim() || (o?.slug ?? "").trim() || cert.organization_id || null;
 
-    const canDownload = typeof cert.course_id === "string" && cert.course_id.length > 0;
-    const downloadHref = canDownload ? `/api/courses/${cert.course_id}/certificate-template?download=1` : null;
+    const canDownload = typeof cert.id === "string" && cert.id.length > 0;
+    const downloadHref = canDownload ? `/api/certificates/${cert.id}/download` : null;
 
     return {
       id: cert.id,

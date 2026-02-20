@@ -361,3 +361,99 @@ div[data-callout="info"] [data-callout-body] {
   margin-top: 1.25em;
   margin-bottom: 1.25em;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Course Builder V2 — themed dashed focus-visible rings                      */
+/*                                                                            */
+/* .cb-form          — wraps the main Course Builder V2 page (green theme)   */
+/* .cb-quiz-form     — wraps the Quiz Wizard Modal content (blue theme)       */
+/*                                                                            */
+/* Per-element helpers (for individual overrides):                            */
+/* .cb-focus-green / .cb-focus-blue / .cb-focus-violet / .cb-focus-amber      */
+/* -------------------------------------------------------------------------- */
+
+/* — Wrapper-level: all form controls inside .cb-form get green dashed ring */
+.cb-form input:focus-visible,
+.cb-form textarea:focus-visible,
+.cb-form select:focus-visible {
+  outline: 2px dashed rgba(27, 135, 85, 0.65) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 4px rgba(27, 135, 85, 0.08) !important;
+  border-color: rgba(27, 135, 85, 0.4) !important;
+}
+
+/* — Wrapper-level: all form controls inside .cb-quiz-form get blue dashed ring */
+.cb-quiz-form input:focus-visible,
+.cb-quiz-form textarea:focus-visible,
+.cb-quiz-form select:focus-visible {
+  outline: 2px dashed rgba(27, 107, 184, 0.65) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 4px rgba(27, 107, 184, 0.08) !important;
+  border-color: rgba(27, 107, 184, 0.4) !important;
+}
+
+/* — Rich text editor focus rings (uses :focus-within on the .rt-editor wrapper) */
+.cb-form .rt-editor:focus-within {
+  outline: 2px dashed rgba(27, 135, 85, 0.65) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 4px rgba(27, 135, 85, 0.08) !important;
+  border-color: rgba(27, 135, 85, 0.4) !important;
+}
+
+.cb-quiz-form .rt-editor:focus-within {
+  outline: 2px dashed rgba(27, 107, 184, 0.65) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 4px rgba(27, 107, 184, 0.08) !important;
+  border-color: rgba(27, 107, 184, 0.4) !important;
+}
+
+/* — Per-element helpers (override the wrapper when needed) */
+.cb-focus-green:focus-visible,
+.cb-focus-green:focus {
+  outline: 2px dashed rgba(27, 135, 85, 0.7) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 4px rgba(27, 135, 85, 0.10) !important;
+  border-color: rgba(27, 135, 85, 0.4) !important;
+}
+
+.cb-focus-blue:focus-visible,
+.cb-focus-blue:focus {
+  outline: 2px dashed rgba(27, 107, 184, 0.7) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 4px rgba(27, 107, 184, 0.10) !important;
+  border-color: rgba(27, 107, 184, 0.4) !important;
+}
+
+.cb-focus-violet:focus-visible,
+.cb-focus-violet:focus {
+  outline: 2px dashed rgba(124, 58, 189, 0.7) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 4px rgba(124, 58, 189, 0.10) !important;
+  border-color: rgba(124, 58, 189, 0.4) !important;
+}
+
+.cb-focus-amber:focus-visible,
+.cb-focus-amber:focus {
+  outline: 2px dashed rgba(184, 114, 22, 0.7) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 4px rgba(184, 114, 22, 0.10) !important;
+  border-color: rgba(184, 114, 22, 0.4) !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Course Builder V2 — gradient animation keyframe                            */
+/* Used by inline-styled tab buttons via animation: cb-gradient-shift        */
+/* -------------------------------------------------------------------------- */
+
+@keyframes cb-gradient-shift {
+  0%   { background-position: 0%   50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0%   50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

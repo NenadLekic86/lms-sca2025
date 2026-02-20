@@ -105,8 +105,8 @@ export default async function CertificatesPage({ params }: { params: Promise<{ o
       (user.role === "member" && user.email && user.email.trim().length > 0 ? user.email.trim() : null);
     const userLabel = fullName ? (email ? `${fullName} (${email})` : fullName) : (email ?? cert.user_id ?? "—");
 
-    const canDownload = typeof cert.course_id === "string" && cert.course_id.length > 0;
-    const downloadHref = canDownload ? `/api/courses/${cert.course_id}/certificate-template?download=1` : null;
+    const canDownload = typeof cert.id === "string" && cert.id.length > 0;
+    const downloadHref = canDownload ? `/api/certificates/${cert.id}/download` : null;
 
     return {
       id: cert.id,

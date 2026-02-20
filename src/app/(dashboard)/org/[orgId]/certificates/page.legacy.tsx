@@ -162,7 +162,7 @@ export default async function CertificatesPage({ params }: { params: Promise<{ o
                       {canDownload ? (
                         <Button size="sm" variant="outline" asChild>
                           <a
-                            href={`/api/courses/${cert.course_id}/certificate-template?download=1`}
+                            href={`/api/certificates/${cert.id}/download`}
                             target="_blank"
                             rel="noreferrer"
                           >
