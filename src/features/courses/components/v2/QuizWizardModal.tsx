@@ -300,12 +300,21 @@ function questionTypeMeta(type: QuizQuestionType): { label: string; icon: React.
   }
 }
 
-function QFieldLabel({ children, accent = "#1b8755" }: { children: React.ReactNode; accent?: string }) {
+function QFieldLabel({
+  children,
+  accent = "#1b8755",
+  required = false,
+}: {
+  children: React.ReactNode;
+  accent?: string;
+  required?: boolean;
+}) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "7px", marginBottom: "7px" }}>
       <span style={{ display: "block", width: 3, height: 16, borderRadius: 2, background: accent, flexShrink: 0 }} />
       <span style={{ fontWeight: 700, fontSize: "13px", color: "#1a1a1a", letterSpacing: "0.01em" }}>
         {children}
+        {required ? <span aria-hidden="true"> *</span> : null}
       </span>
     </div>
   );
@@ -972,7 +981,7 @@ export function QuizWizardModal({
       {step === 1 ? (
         <div className="space-y-6">
           <div>
-            <QFieldLabel>Quiz Title</QFieldLabel>
+            <QFieldLabel required>Quiz Title</QFieldLabel>
             <Input
               className={cn(focusField)}
               value={title}
@@ -1084,7 +1093,7 @@ export function QuizWizardModal({
               </div>
 
               <div>
-                <QFieldLabel accent="#1b6bb8">Write your question here</QFieldLabel>
+                <QFieldLabel accent="#1b6bb8" required>Write your question here</QFieldLabel>
                 <Input
                   className={cn(focusField)}
                   value={editingQuestion.title}

@@ -224,7 +224,15 @@ function FieldHint({ children }: { children: React.ReactNode }) {
   return <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{children}</p>;
 }
 
-function FieldLabel({ children, accent = "#1b8755" }: { children: React.ReactNode; accent?: string }) {
+function FieldLabel({
+  children,
+  accent = "#1b8755",
+  required = false,
+}: {
+  children: React.ReactNode;
+  accent?: string;
+  required?: boolean;
+}) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "7px", marginBottom: "7px" }}>
       <span
@@ -232,6 +240,7 @@ function FieldLabel({ children, accent = "#1b8755" }: { children: React.ReactNod
       />
       <span style={{ fontWeight: 700, fontSize: "13px", color: "#1a1a1a", letterSpacing: "0.01em" }}>
         {children}
+        {required ? <span aria-hidden="true"> *</span> : null}
       </span>
     </div>
   );
@@ -1445,7 +1454,8 @@ export function CourseEditorV2Form({
     return `${origin}/org/${encodeURIComponent(orgSlug)}/courses/${encodeURIComponent(usableSlug)}`;
   }, [origin, orgSlug, slug, title]);
 
-  const canPublish = topics.length > 0 && title.trim().length >= 2 && hasMeaningfulRichText(aboutHtml);
+  const canSave = title.trim().length >= 2;
+  const canPublish = topics.length > 0 && canSave && hasMeaningfulRichText(aboutHtml);
   const previewHref = courseId ? `/org/${orgSlug}/courses/${encodeURIComponent((slug || "").trim() || courseId)}` : null;
   const canPreview = Boolean(previewHref) && !hasUnsavedChanges && !isBusy;
 
@@ -1575,8 +1585,49 @@ export function CourseEditorV2Form({
     const topicIdMap = new Map<string, string>();
     const itemIdMap = new Map<string, string>();
 
+    // 0) Apply buffered deletions first so reorder calls can't fail due to mismatched ID sets.
+    // If reorder fails after partial creates, users can end up with duplicated chapters/lessons on return.
+    const processedItemDeletes = new Set<string>();
+    for (const itemId of pendingDeletedItemIds) {
+      if (isTempId(itemId)) continue;
+      try {
+        await fetchJson(`/api/v2/items/${itemId}`, { method: "DELETE" });
+        processedItemDeletes.add(itemId);
+      } catch (e) {
+        // Treat already-deleted as success so we never get stuck retrying.
+        if (e instanceof ApiClientError && e.status === 404) {
+          processedItemDeletes.add(itemId);
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (processedItemDeletes.size) {
+      setPendingDeletedItemIds((prev) => prev.filter((id) => !processedItemDeletes.has(id)));
+    }
+
+    const processedTopicDeletes = new Set<string>();
+    for (const topicId of pendingDeletedTopicIds) {
+      if (isTempId(topicId)) continue;
+      try {
+        await fetchJson(`/api/v2/topics/${topicId}`, { method: "DELETE" });
+        processedTopicDeletes.add(topicId);
+      } catch (e) {
+        if (e instanceof ApiClientError && e.status === 404) {
+          processedTopicDeletes.add(topicId);
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (processedTopicDeletes.size) {
+      setPendingDeletedTopicIds((prev) => prev.filter((id) => !processedTopicDeletes.has(id)));
+    }
+
+    const topicsToSync = topics.filter((t) => !pendingDeletedTopicIds.includes(t.id));
+
     // 1) Create/update topics (capture new IDs for temp topics).
-    for (const topic of topics) {
+    for (const topic of topicsToSync) {
       if (isTempId(topic.id)) {
         const { data } = await fetchJson<{ topic: { id: string; title: string; summary: string | null; position: number } }>(
           `/api/v2/courses/${courseIdToUse}/topics`,
@@ -1597,7 +1648,7 @@ export function CourseEditorV2Form({
     }
 
     // 2) Apply topic ordering.
-    const resolvedOrderedTopicIds = topics.map((t) => topicIdMap.get(t.id) ?? t.id).filter((id) => !isTempId(id));
+    const resolvedOrderedTopicIds = topicsToSync.map((t) => topicIdMap.get(t.id) ?? t.id).filter((id) => !isTempId(id));
     if (resolvedOrderedTopicIds.length) {
       await fetchJson(`/api/v2/courses/${courseIdToUse}/topics/reorder`, {
         method: "POST",
@@ -1608,7 +1659,7 @@ export function CourseEditorV2Form({
 
     // 3) Create/update items + upload lesson assets + reorder items per topic.
     const nextTopics: CourseTopic[] = [];
-    for (const topic of topics) {
+    for (const topic of topicsToSync) {
       const resolvedTopicId = topicIdMap.get(topic.id) ?? topic.id;
       const nextItems: CourseTopicItem[] = [];
 
@@ -1868,16 +1919,6 @@ export function CourseEditorV2Form({
         id: resolvedTopicId,
         items: nextItems.map((it, idx) => ({ ...it, position: idx })),
       });
-    }
-
-    // 4) Apply buffered deletions (existing IDs only).
-    for (const itemId of pendingDeletedItemIds) {
-      if (isTempId(itemId)) continue;
-      await fetchJson(`/api/v2/items/${itemId}`, { method: "DELETE" });
-    }
-    for (const topicId of pendingDeletedTopicIds) {
-      if (isTempId(topicId)) continue;
-      await fetchJson(`/api/v2/topics/${topicId}`, { method: "DELETE" });
     }
 
     return nextTopics.map((t, idx) => ({ ...t, position: idx }));
@@ -2830,7 +2871,7 @@ export function CourseEditorV2Form({
             onClick={() => {
               void (status === "published" ? savePublished() : saveDraft());
             }}
-            disabled={isBusy}
+            disabled={isBusy || !canSave}
           >
             {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Save
@@ -2991,7 +3032,7 @@ export function CourseEditorV2Form({
       {activeMainTab === "information" ? <DetailsSection title="Course Info">
         <div className="space-y-6">
           <div>
-            <FieldLabel>Course Title</FieldLabel>
+            <FieldLabel required>Course Title</FieldLabel>
             <Input
             value={title}
             onChange={(e) => {
@@ -3007,7 +3048,7 @@ export function CourseEditorV2Form({
           </div>
 
           <div>
-            <FieldLabel>Course Slug</FieldLabel>
+            <FieldLabel required>Course Slug</FieldLabel>
             <Input
             value={slug}
             onChange={(e) => {
@@ -3919,7 +3960,7 @@ export function CourseEditorV2Form({
             </div>
             <div className="p-4 space-y-4">
               <div>
-                <FieldLabel>Chapter Name</FieldLabel>
+                <FieldLabel required>Chapter Name</FieldLabel>
                 <Input
                   value={topicModal.title}
                   onChange={(e) => setTopicModal((prev) => (prev ? { ...prev, title: e.target.value } : prev))}
@@ -4018,7 +4059,7 @@ export function CourseEditorV2Form({
             <div className="p-4 space-y-6 max-h-[75vh] overflow-auto">
               <>
                   <div>
-                    <FieldLabel accent="#1b6bb8">Lesson Name</FieldLabel>
+                    <FieldLabel accent="#1b6bb8" required>Lesson Name</FieldLabel>
                     <Input
                       value={itemModal.lessonName}
                       onChange={(e) =>
