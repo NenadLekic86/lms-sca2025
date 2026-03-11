@@ -20,6 +20,7 @@ type ItemRow = {
   title: string | null;
   position: number;
   payload_json: Record<string, unknown>;
+  is_required?: boolean | null;
 };
 
 export default async function OrgCourseEditV2Page({
@@ -58,7 +59,7 @@ export default async function OrgCourseEditV2Page({
       supabase.from("course_topics").select("id, title, summary, position").eq("course_id", courseId).order("position", { ascending: true }),
       supabase
         .from("course_topic_items")
-        .select("id, topic_id, item_type, title, position, payload_json")
+        .select("id, topic_id, item_type, title, position, payload_json, is_required")
         .eq("course_id", courseId)
         .order("position", { ascending: true }),
       admin
@@ -102,7 +103,16 @@ export default async function OrgCourseEditV2Page({
     title: t.title,
     summary: t.summary,
     position: t.position,
-    items: (itemMap.get(t.id) ?? []).sort((a, b) => a.position - b.position),
+    items: (itemMap.get(t.id) ?? [])
+      .sort((a, b) => a.position - b.position)
+      .map((it) => ({
+        id: it.id,
+        item_type: it.item_type,
+        title: it.title ?? null,
+        position: it.position,
+        payload_json: it.payload_json ?? {},
+        is_required: Boolean(it.is_required),
+      })),
   }));
 
   const assignedRows = Array.isArray(assignedData) ? assignedData : [];

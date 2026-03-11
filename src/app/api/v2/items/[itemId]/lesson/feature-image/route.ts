@@ -4,18 +4,6 @@ import { apiError, apiOk } from "@/lib/api/response";
 
 export const runtime = "nodejs";
 
-async function ensureLessonAssetsBucket(admin: ReturnType<typeof createAdminSupabaseClient>) {
-  const bucketId = "course-lesson-assets";
-  const { data, error } = await admin.storage.getBucket(bucketId);
-  if (!error && data?.id) return;
-  // Most common: bucket not created yet in this Supabase project.
-  const create = await admin.storage.createBucket(bucketId, { public: false });
-  if (create.error) {
-    // If bucket already exists or creation is forbidden, we continue and let upload return a clearer error.
-    console.error("[lesson-assets] bucket ensure failed", create.error);
-  }
-}
-
 function getExtFromMime(mime: string): string {
   if (mime === "image/png") return "png";
   if (mime === "image/jpeg") return "jpg";
@@ -40,7 +28,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ it
   if (file.size > maxBytes) return apiError("VALIDATION_ERROR", "File too large (max 10MB).", { status: 400 });
 
   const admin = createAdminSupabaseClient();
-  await ensureLessonAssetsBucket(admin);
   const { data: item, error: itemError } = await admin
     .from("course_topic_items")
     .select("id, organization_id, course_id")

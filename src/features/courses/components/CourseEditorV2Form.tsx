@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Award,
@@ -66,6 +66,7 @@ export type CourseTopicItem = {
   title: string | null;
   position: number;
   payload_json: Record<string, unknown>;
+  is_required?: boolean;
 };
 
 export type CourseTopic = {
@@ -1094,6 +1095,10 @@ export function CourseEditorV2Form({
 
   const currentSignature = useMemo(() => {
     const members = [...selectedMemberIds].sort();
+    const memberAccessSig = members.map((id) => ({
+      id,
+      access: memberAccessById[id] ?? memberDefaultAccess,
+    }));
     const topicsSig = topics.map((t) => ({
       id: t.id,
       title: t.title,
@@ -1103,6 +1108,7 @@ export function CourseEditorV2Form({
         id: it.id,
         item_type: it.item_type,
         title: it.title ?? null,
+        is_required: Boolean((it as { is_required?: unknown }).is_required),
         position: it.position,
         payload_json: it.payload_json ?? {},
       })),
@@ -1134,6 +1140,8 @@ export function CourseEditorV2Form({
       videoUrl,
       thumbnailUrl,
       members,
+      memberDefaultAccess,
+      memberAccessSig,
       topicsSig,
       pendingDeletedTopicIds: pendingDeletedTopicIds.slice().sort(),
       pendingDeletedItemIds: pendingDeletedItemIds.slice().sort(),
@@ -1149,6 +1157,8 @@ export function CourseEditorV2Form({
     hours,
     isSlugManuallyEdited,
     materialsIncluded,
+    memberAccessById,
+    memberDefaultAccess,
     minutes,
     pendingDeletedItemIds,
     pendingDeletedTopicIds,
@@ -1171,6 +1181,11 @@ export function CourseEditorV2Form({
   useEffect(() => {
     if (savedSignatureRef.current) return;
     const snap = savedSnapshotRef.current;
+    const members = (snap.selectedMemberIds ?? []).slice().sort();
+    const memberAccessSig = members.map((id) => ({
+      id,
+      access: memberAccessById[id] ?? memberDefaultAccess,
+    }));
     savedSignatureRef.current = JSON.stringify({
       courseId: snap.courseId,
       status: snap.status,
@@ -1188,7 +1203,9 @@ export function CourseEditorV2Form({
       videoProvider: snap.videoProvider,
       videoUrl: snap.videoUrl,
       thumbnailUrl: snap.thumbnailUrl,
-      members: (snap.selectedMemberIds ?? []).slice().sort(),
+      members,
+      memberDefaultAccess,
+      memberAccessSig,
       topicsSig: (snap.topics ?? []).map((t) => ({
         id: t.id,
         title: t.title,
@@ -1198,6 +1215,7 @@ export function CourseEditorV2Form({
           id: it.id,
           item_type: it.item_type,
           title: it.title ?? null,
+          is_required: Boolean((it as { is_required?: unknown }).is_required),
           position: it.position,
           payload_json: it.payload_json ?? {},
         })),
@@ -1208,7 +1226,7 @@ export function CourseEditorV2Form({
       hasIntroVideoFile: false,
       hasThumbnailFile: false,
     });
-  }, []);
+  }, [memberAccessById, memberDefaultAccess]);
 
   const hasUnsavedChanges = currentSignature !== savedSignatureRef.current;
 
@@ -1512,11 +1530,19 @@ export function CourseEditorV2Form({
       html: aboutHtml,
       queue: pruned,
       upload: async ({ uploadId, file }) => {
-        const form = new FormData();
-        form.append("file", file);
-        form.append("upload_id", uploadId);
-        const { data } = await fetchJson<{ storage_path: string }>(`/api/v2/courses/${courseIdToUse}/inline-images`, { method: "POST", body: form });
-        return { storage_path: String(data?.storage_path ?? "") };
+        const { data: sign } = await fetchJson<{ bucket_id: string; object_name: string; token: string }>(
+          `/api/v2/courses/${courseIdToUse}/inline-images/sign`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mime: file.type, size_bytes: file.size, file_name: file.name }),
+          }
+        );
+        const uploadRes = await supabase.storage.from(sign.bucket_id).uploadToSignedUrl(sign.object_name, sign.token, file, {
+          contentType: file.type,
+        });
+        if (uploadRes.error) throw new Error(`Inline image upload failed: ${uploadRes.error.message}`);
+        return { storage_path: String(sign.object_name ?? ""), upload_id: uploadId };
       },
       stableSrcForStoragePath: (storagePath) => `/api/v2/course-assets?path=${encodeURIComponent(storagePath)}`,
     });
@@ -1575,18 +1601,54 @@ export function CourseEditorV2Form({
     setBaselineMemberExpiresAtById(nextBaseline);
   }
 
+  const getMembersSignature = useCallback((): string => {
+    const ids = [...selectedMemberIds].sort();
+    const list = ids.map((id) => ({ id, access: memberAccessById[id] ?? memberDefaultAccess }));
+    return JSON.stringify({ default_access: memberDefaultAccess, list });
+  }, [memberAccessById, memberDefaultAccess, selectedMemberIds]);
+
+  const savedMembersSignatureRef = useRef<string>("");
+  useEffect(() => {
+    if (savedMembersSignatureRef.current) return;
+    savedMembersSignatureRef.current = getMembersSignature();
+  }, [getMembersSignature]);
+
   function isTempId(id: string): boolean {
     return id.startsWith("tmp_");
   }
 
   async function syncCurriculumToServer(courseIdToUse: string): Promise<CourseTopic[]> {
-    // This applies ALL local Course Builder changes (create/edit/reorder/delete + lesson assets)
-    // in one explicit Save / Publish action.
-    const topicIdMap = new Map<string, string>();
-    const itemIdMap = new Map<string, string>();
+    function stableJsonStringify(value: unknown): string {
+      const seen = new WeakSet<object>();
+      const normalize = (v: unknown): unknown => {
+        if (!v) return v;
+        if (typeof v !== "object") return v;
+        if (seen.has(v as object)) return null;
+        seen.add(v as object);
+        if (Array.isArray(v)) return v.map(normalize);
+        const obj = v as Record<string, unknown>;
+        const out: Record<string, unknown> = {};
+        for (const k of Object.keys(obj).sort()) out[k] = normalize(obj[k]);
+        return out;
+      };
+      return JSON.stringify(normalize(value));
+    }
 
-    // 0) Apply buffered deletions first so reorder calls can't fail due to mismatched ID sets.
-    // If reorder fails after partial creates, users can end up with duplicated chapters/lessons on return.
+    async function runWithConcurrency<T>(limit: number, fns: Array<() => Promise<T>>): Promise<T[]> {
+      const results: T[] = new Array(fns.length);
+      let next = 0;
+      const workers = Array.from({ length: Math.min(limit, fns.length) }, async () => {
+        while (true) {
+          const idx = next++;
+          if (idx >= fns.length) break;
+          results[idx] = await fns[idx]();
+        }
+      });
+      await Promise.all(workers);
+      return results;
+    }
+
+    // 0) Apply buffered deletions first (this enqueues delayed Storage cleanup via DELETE endpoints).
     const processedItemDeletes = new Set<string>();
     for (const itemId of pendingDeletedItemIds) {
       if (isTempId(itemId)) continue;
@@ -1626,80 +1688,88 @@ export function CourseEditorV2Form({
 
     const topicsToSync = topics.filter((t) => !pendingDeletedTopicIds.includes(t.id));
 
-    // 1) Create/update topics (capture new IDs for temp topics).
-    for (const topic of topicsToSync) {
-      if (isTempId(topic.id)) {
-        const { data } = await fetchJson<{ topic: { id: string; title: string; summary: string | null; position: number } }>(
-          `/api/v2/courses/${courseIdToUse}/topics`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title: topic.title, summary: topic.summary ?? "" }),
-          }
-        );
-        topicIdMap.set(topic.id, data.topic.id);
-      } else {
-        await fetchJson(`/api/v2/topics/${topic.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: topic.title, summary: topic.summary ?? "" }),
+    // 1) Sync curriculum STRUCTURE (create/update/reorder/delete) in a single DB transaction via RPC.
+    const rpcPayload = {
+      topics: topicsToSync.map((t, tIdx) => ({
+        client_id: t.id,
+        // RPC expects `id` for BOTH existing UUIDs and temp client IDs (e.g. "tmp_...").
+        id: t.id,
+        title: t.title,
+        summary: t.summary ?? null,
+        position: tIdx,
+        items: (t.items ?? [])
+          .filter((it) => !pendingDeletedItemIds.includes(it.id))
+          .map((it, iIdx) => ({
+            client_id: it.id,
+            id: it.id,
+            item_type: it.item_type,
+            title: it.title ?? null,
+            is_required: Boolean((it as { is_required?: unknown }).is_required),
+            position: iIdx,
+          })),
+      })),
+    };
+
+    const { data: rpcRes } = await fetchJson<{ id_map?: Record<string, string> }>(`/api/v2/courses/${courseIdToUse}/curriculum/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rpcPayload),
+    });
+
+    const idMapRaw = (rpcRes as { id_map?: Record<string, string> } | null)?.id_map ?? {};
+    const resolveId = (id: string) => {
+      const v = idMapRaw[id];
+      return typeof v === "string" && v.trim().length > 0 ? v : id;
+    };
+
+    const resolvedToClientItemId = new Map<string, string>();
+    const resolvedTopics: CourseTopic[] = topicsToSync.map((t, tIdx) => {
+      const resolvedTopicId = resolveId(t.id);
+      const nextItems: CourseTopicItem[] = (t.items ?? [])
+        .filter((it) => !pendingDeletedItemIds.includes(it.id))
+        .map((it, iIdx) => {
+          const resolvedItemId = resolveId(it.id);
+          resolvedToClientItemId.set(resolvedItemId, it.id);
+          return {
+            ...it,
+            id: resolvedItemId,
+            position: iIdx,
+            is_required: Boolean((it as { is_required?: unknown }).is_required),
+            payload_json: (it.payload_json ?? {}) as Record<string, unknown>,
+          };
         });
+      return {
+        ...t,
+        id: resolvedTopicId,
+        position: tIdx,
+        items: nextItems,
+      };
+    });
+
+    // 2) Patch only CHANGED/NEW item payload_json (and upload queued assets) with a concurrency limit.
+    const savedPayloadSigById = new Map<string, string>();
+    for (const t of savedSnapshotRef.current.topics ?? []) {
+      for (const it of t.items ?? []) {
+        savedPayloadSigById.set(it.id, stableJsonStringify((it.payload_json ?? {}) as Record<string, unknown>));
       }
     }
 
-    // 2) Apply topic ordering.
-    const resolvedOrderedTopicIds = topicsToSync.map((t) => topicIdMap.get(t.id) ?? t.id).filter((id) => !isTempId(id));
-    if (resolvedOrderedTopicIds.length) {
-      await fetchJson(`/api/v2/courses/${courseIdToUse}/topics/reorder`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ordered_topic_ids: resolvedOrderedTopicIds }),
-      });
-    }
-
-    // 3) Create/update items + upload lesson assets + reorder items per topic.
-    const nextTopics: CourseTopic[] = [];
-    for (const topic of topicsToSync) {
-      const resolvedTopicId = topicIdMap.get(topic.id) ?? topic.id;
-      const nextItems: CourseTopicItem[] = [];
-
+    const patchTasks: Array<() => Promise<CourseTopicItem | null>> = [];
+    for (const topic of resolvedTopics) {
       for (const item of topic.items ?? []) {
-        // Skip items that were deleted locally.
-        if (pendingDeletedItemIds.includes(item.id)) continue;
+        patchTasks.push(async () => {
+          const resolvedItemId = item.id;
+          const clientItemId = resolvedToClientItemId.get(resolvedItemId) ?? resolvedItemId;
+          const pendingUploads = pendingLessonUploadsByItemId[clientItemId] ?? pendingLessonUploadsByItemId[resolvedItemId] ?? null;
 
-        let resolvedItemId = itemIdMap.get(item.id) ?? item.id;
-        let savedItem: CourseTopicItem;
+          let nextPayload: Record<string, unknown> = { ...(item.payload_json ?? {}) };
+          let shouldPatch = false;
 
-        if (isTempId(item.id)) {
-          const { data } = await fetchJson<{ item: CourseTopicItem }>(`/api/v2/topics/${resolvedTopicId}/items`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              item_type: item.item_type,
-              title: item.title ?? "",
-              payload_json: item.payload_json ?? {},
-            }),
-          });
-          savedItem = data.item;
-          resolvedItemId = savedItem.id;
-          itemIdMap.set(item.id, savedItem.id);
-        } else {
-          const { data } = await fetchJson<{ item: CourseTopicItem }>(`/api/v2/items/${resolvedItemId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              title: item.title ?? "",
-              payload_json: item.payload_json ?? {},
-            }),
-          });
-          savedItem = data.item;
-        }
-
-        // If this is a lesson, upload pending assets (if any), then patch payload_json with storage paths.
-        const pendingUploads = pendingLessonUploadsByItemId[item.id] ?? pendingLessonUploadsByItemId[resolvedItemId] ?? null;
-        if (savedItem.item_type === "lesson" && pendingUploads) {
-          const p = (savedItem.payload_json ?? {}) as Record<string, unknown>;
-          const basePayload: Record<string, unknown> = { ...p };
+          // LESSON: upload assets + rewrite inline images, then patch payload_json.
+          if (item.item_type === "lesson" && pendingUploads) {
+            shouldPatch = true;
+            const p = nextPayload as Record<string, unknown>;
+            const basePayload: Record<string, unknown> = { ...p };
 
           let featureImageStoragePath: string | null =
             typeof (p.feature_image as { storage_path?: unknown } | null)?.storage_path === "string"
@@ -1707,10 +1777,20 @@ export function CourseEditorV2Form({
               : null;
 
           if (pendingUploads.featureImageFile) {
-            const form = new FormData();
-            form.append("file", pendingUploads.featureImageFile);
-            const { data } = await fetchJson<{ storage_path: string }>(`/api/v2/items/${resolvedItemId}/lesson/feature-image`, { method: "POST", body: form });
-            featureImageStoragePath = data.storage_path;
+            const file = pendingUploads.featureImageFile;
+            const { data: sign } = await fetchJson<{ bucket_id: string; object_name: string; token: string }>(
+              `/api/v2/items/${resolvedItemId}/lesson/feature-image/sign`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mime: file.type, size_bytes: file.size }),
+              }
+            );
+            const uploadRes = await supabase.storage.from(sign.bucket_id).uploadToSignedUrl(sign.object_name, sign.token, file, {
+              contentType: file.type,
+            });
+            if (uploadRes.error) throw new Error(`Feature image upload failed: ${uploadRes.error.message}`);
+            featureImageStoragePath = sign.object_name;
           }
 
           let videoStoragePath: string | null =
@@ -1799,11 +1879,19 @@ export function CourseEditorV2Form({
                   html: blockHtml,
                   queue: blockQueue,
                   upload: async ({ uploadId, file }) => {
-                    const form = new FormData();
-                    form.append("file", file);
-                    form.append("upload_id", uploadId);
-                    const { data } = await fetchJson<{ storage_path: string }>(`/api/v2/items/${resolvedItemId}/lesson/inline-images`, { method: "POST", body: form });
-                    return { storage_path: String(data?.storage_path ?? "") };
+                    const { data: sign } = await fetchJson<{ bucket_id: string; object_name: string; token: string }>(
+                      `/api/v2/items/${resolvedItemId}/lesson/inline-images/sign`,
+                      {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ mime: file.type, size_bytes: file.size, file_name: file.name }),
+                      }
+                    );
+                    const uploadRes = await supabase.storage.from(sign.bucket_id).uploadToSignedUrl(sign.object_name, sign.token, file, {
+                      contentType: file.type,
+                    });
+                    if (uploadRes.error) throw new Error(`Inline image upload failed: ${uploadRes.error.message}`);
+                    return { storage_path: String(sign.object_name ?? ""), upload_id: uploadId };
                   },
                   stableSrcForStoragePath: (storagePath) => `/api/v2/lesson-assets?path=${encodeURIComponent(storagePath)}`,
                 });
@@ -1833,95 +1921,116 @@ export function CourseEditorV2Form({
                 : p.video,
             attachments: uploadedAttachments,
           };
-
-          const { data: patched } = await fetchJson<{ item: CourseTopicItem }>(`/api/v2/items/${resolvedItemId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title: savedItem.title ?? "", payload_json: finalPayload }),
-          });
-          savedItem = patched.item;
-        }
-
-        // If this is a quiz, upload any queued inline images referenced inside question HTML, then patch payload_json.
-        if (savedItem.item_type === "quiz" && pendingUploads && Object.keys(pendingUploads.inlineImages ?? {}).length) {
-          const base = (savedItem.payload_json ?? {}) as Record<string, unknown>;
-          const workingQueue: InlineImageQueue = { ...(pendingUploads.inlineImages ?? {}) };
-          const rawQuestions = Array.isArray((base as { questions?: unknown }).questions) ? ((base as { questions: unknown[] }).questions as unknown[]) : [];
-
-          const nextQuestions = [];
-          for (const q of rawQuestions) {
-            if (!q || typeof q !== "object") {
-              nextQuestions.push(q);
-              continue;
-            }
-            const qq = q as Record<string, unknown>;
-            let desc = typeof qq.description_html === "string" ? (qq.description_html as string) : "";
-            let expl = typeof qq.answer_explanation_html === "string" ? (qq.answer_explanation_html as string) : "";
-            if (desc && Object.keys(workingQueue).length) {
-              const res = await finalizeInlineImagesInHtml({
-                html: desc,
-                queue: workingQueue,
-                upload: async ({ uploadId, file }) => {
-                  const form = new FormData();
-                  form.append("file", file);
-                  form.append("upload_id", uploadId);
-                  const { data } = await fetchJson<{ storage_path: string }>(`/api/v2/items/${resolvedItemId}/lesson/inline-images`, { method: "POST", body: form });
-                  return { storage_path: String(data?.storage_path ?? "") };
-                },
-                stableSrcForStoragePath: (storagePath) => `/api/v2/lesson-assets?path=${encodeURIComponent(storagePath)}`,
-              });
-              desc = res.html;
-              for (const id of res.uploadedIds) delete workingQueue[id];
-            }
-            if (expl && Object.keys(workingQueue).length) {
-              const res = await finalizeInlineImagesInHtml({
-                html: expl,
-                queue: workingQueue,
-                upload: async ({ uploadId, file }) => {
-                  const form = new FormData();
-                  form.append("file", file);
-                  form.append("upload_id", uploadId);
-                  const { data } = await fetchJson<{ storage_path: string }>(`/api/v2/items/${resolvedItemId}/lesson/inline-images`, { method: "POST", body: form });
-                  return { storage_path: String(data?.storage_path ?? "") };
-                },
-                stableSrcForStoragePath: (storagePath) => `/api/v2/lesson-assets?path=${encodeURIComponent(storagePath)}`,
-              });
-              expl = res.html;
-              for (const id of res.uploadedIds) delete workingQueue[id];
-            }
-
-            nextQuestions.push({ ...qq, description_html: desc, answer_explanation_html: expl });
+            nextPayload = finalPayload;
           }
 
-          const nextPayload: Record<string, unknown> = { ...base, questions: nextQuestions };
+          // QUIZ: upload any queued inline images referenced inside question HTML, then patch payload_json.
+          if (item.item_type === "quiz" && pendingUploads && Object.keys(pendingUploads.inlineImages ?? {}).length) {
+            shouldPatch = true;
+            const base = nextPayload as Record<string, unknown>;
+            const workingQueue: InlineImageQueue = { ...(pendingUploads.inlineImages ?? {}) };
+            const rawQuestions = Array.isArray((base as { questions?: unknown }).questions) ? ((base as { questions: unknown[] }).questions as unknown[]) : [];
+
+            const nextQuestions = [];
+            for (const q of rawQuestions) {
+              if (!q || typeof q !== "object") {
+                nextQuestions.push(q);
+                continue;
+              }
+              const qq = q as Record<string, unknown>;
+              let desc = typeof qq.description_html === "string" ? (qq.description_html as string) : "";
+              let expl = typeof qq.answer_explanation_html === "string" ? (qq.answer_explanation_html as string) : "";
+              if (desc && Object.keys(workingQueue).length) {
+                const res = await finalizeInlineImagesInHtml({
+                  html: desc,
+                  queue: workingQueue,
+                  upload: async ({ uploadId, file }) => {
+                    const { data: sign } = await fetchJson<{ bucket_id: string; object_name: string; token: string }>(
+                      `/api/v2/items/${resolvedItemId}/lesson/inline-images/sign`,
+                      {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ mime: file.type, size_bytes: file.size, file_name: file.name }),
+                      }
+                    );
+                    const uploadRes = await supabase.storage.from(sign.bucket_id).uploadToSignedUrl(sign.object_name, sign.token, file, {
+                      contentType: file.type,
+                    });
+                    if (uploadRes.error) throw new Error(`Inline image upload failed: ${uploadRes.error.message}`);
+                    return { storage_path: String(sign.object_name ?? ""), upload_id: uploadId };
+                  },
+                  stableSrcForStoragePath: (storagePath) => `/api/v2/lesson-assets?path=${encodeURIComponent(storagePath)}`,
+                });
+                desc = res.html;
+                for (const id of res.uploadedIds) delete workingQueue[id];
+              }
+              if (expl && Object.keys(workingQueue).length) {
+                const res = await finalizeInlineImagesInHtml({
+                  html: expl,
+                  queue: workingQueue,
+                  upload: async ({ uploadId, file }) => {
+                    const { data: sign } = await fetchJson<{ bucket_id: string; object_name: string; token: string }>(
+                      `/api/v2/items/${resolvedItemId}/lesson/inline-images/sign`,
+                      {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ mime: file.type, size_bytes: file.size, file_name: file.name }),
+                      }
+                    );
+                    const uploadRes = await supabase.storage.from(sign.bucket_id).uploadToSignedUrl(sign.object_name, sign.token, file, {
+                      contentType: file.type,
+                    });
+                    if (uploadRes.error) throw new Error(`Inline image upload failed: ${uploadRes.error.message}`);
+                    return { storage_path: String(sign.object_name ?? ""), upload_id: uploadId };
+                  },
+                  stableSrcForStoragePath: (storagePath) => `/api/v2/lesson-assets?path=${encodeURIComponent(storagePath)}`,
+                });
+                expl = res.html;
+                for (const id of res.uploadedIds) delete workingQueue[id];
+              }
+
+              nextQuestions.push({ ...qq, description_html: desc, answer_explanation_html: expl });
+            }
+
+            nextPayload = { ...base, questions: nextQuestions };
+          }
+
+          const prevSig = savedPayloadSigById.get(resolvedItemId) ?? null;
+          const nextSig = stableJsonStringify(nextPayload);
+          if (!shouldPatch && prevSig !== nextSig) shouldPatch = true;
+
+          // On new items, only patch when there's meaningful payload content.
+          if (!prevSig && !shouldPatch) {
+            const isEmpty = nextSig === "{}" || nextSig === "null";
+            if (!isEmpty) shouldPatch = true;
+          }
+
+          if (!shouldPatch) return null;
+
           const { data: patched } = await fetchJson<{ item: CourseTopicItem }>(`/api/v2/items/${resolvedItemId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title: savedItem.title ?? "", payload_json: nextPayload }),
+            body: JSON.stringify({ payload_json: nextPayload }),
           });
-          savedItem = patched.item;
-        }
-
-        nextItems.push(savedItem);
-      }
-
-      const orderedItemIds = nextItems.map((i) => i.id);
-      if (orderedItemIds.length) {
-        await fetchJson(`/api/v2/topics/${resolvedTopicId}/items/reorder`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ordered_item_ids: orderedItemIds }),
+          return patched.item;
         });
       }
-
-      nextTopics.push({
-        ...topic,
-        id: resolvedTopicId,
-        items: nextItems.map((it, idx) => ({ ...it, position: idx })),
-      });
     }
 
-    return nextTopics.map((t, idx) => ({ ...t, position: idx }));
+    const patchedItems = await runWithConcurrency(3, patchTasks);
+    const patchedById = new Map<string, CourseTopicItem>();
+    for (const it of patchedItems) {
+      if (it && typeof it.id === "string") patchedById.set(it.id, it);
+    }
+
+    return resolvedTopics.map((t, idx) => ({
+      ...t,
+      position: idx,
+      items: (t.items ?? []).map((it, iIdx) => {
+        const patched = patchedById.get(it.id);
+        return patched ? { ...patched, position: iIdx } : { ...it, position: iIdx };
+      }),
+    }));
   }
 
   async function uploadIntroVideo(courseIdToUse: string) {
@@ -1976,12 +2085,21 @@ export function CourseEditorV2Form({
 
   async function uploadThumbnail(courseIdToUse: string) {
     if (!thumbnailFile) return;
-    const form = new FormData();
-    form.append("file", thumbnailFile);
-    const { data } = await fetchJson<{ cover_image_url: string }>(`/api/v2/courses/${courseIdToUse}/thumbnail`, {
+    const file = thumbnailFile;
+    const { data: sign } = await fetchJson<{ bucket_id: string; object_name: string; token: string }>(`/api/v2/courses/${courseIdToUse}/thumbnail/sign`, {
       method: "POST",
-      body: form,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mime: file.type, size_bytes: file.size }),
     });
+    const uploadRes = await supabase.storage.from(sign.bucket_id).uploadToSignedUrl(sign.object_name, sign.token, file, { contentType: file.type });
+    if (uploadRes.error) throw new Error(`Thumbnail upload failed: ${uploadRes.error.message}`);
+
+    const { data } = await fetchJson<{ cover_image_url: string }>(`/api/v2/courses/${courseIdToUse}/thumbnail/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storage_path: sign.object_name, mime: file.type, size_bytes: file.size }),
+    });
+
     setThumbnailUrl(data.cover_image_url);
     setThumbnailFile(null);
   }
@@ -2127,12 +2245,17 @@ export function CourseEditorV2Form({
       courseIdForContext = id;
       const aboutFinal = await runStep("Saving About Course content", () => finalizeCourseAboutInlineImages(id));
       const saved = await runStep("Saving course details", () => saveCore(id, { aboutHtmlOverride: aboutFinal }));
-      await runStep("Saving members", () => saveMembers(id));
+      const membersSigBefore = getMembersSignature();
+      if (membersSigBefore !== savedMembersSignatureRef.current) {
+        await runStep("Saving members", () => saveMembers(id));
+      }
       await runStep("Uploading intro video", () => uploadIntroVideo(id));
-      await runStep("Updating thumbnail", async () => {
-        await removeThumbnailOnServer(id);
-        await uploadThumbnail(id);
-      });
+      if (pendingThumbnailRemoval || thumbnailFile) {
+        await runStep("Updating thumbnail", async () => {
+          await removeThumbnailOnServer(id);
+          await uploadThumbnail(id);
+        });
+      }
       const syncedTopics = await runStep("Saving chapters and lessons", () => syncCurriculumToServer(id));
       setTopics(syncedTopics);
       setPendingDeletedItemIds([]);
@@ -2149,6 +2272,7 @@ export function CourseEditorV2Form({
       const finalSlug = saved.slug ?? slug;
       setSlug(finalSlug);
       setStatus("published");
+      savedMembersSignatureRef.current = getMembersSignature();
 
       // Mark as saved (used by leave-guard / unsaved banner).
       savedSnapshotRef.current = {
@@ -2189,6 +2313,8 @@ export function CourseEditorV2Form({
         videoUrl,
         thumbnailUrl,
         members: [...selectedMemberIds].sort(),
+        memberDefaultAccess,
+        memberAccessSig: [...selectedMemberIds].sort().map((id) => ({ id, access: memberAccessById[id] ?? memberDefaultAccess })),
         topicsSig: syncedTopics.map((t) => ({
           id: t.id,
           title: t.title,
@@ -2198,6 +2324,7 @@ export function CourseEditorV2Form({
             id: it.id,
             item_type: it.item_type,
             title: it.title ?? null,
+            is_required: Boolean((it as { is_required?: unknown }).is_required),
             position: it.position,
             payload_json: it.payload_json ?? {},
           })),
@@ -2268,12 +2395,17 @@ export function CourseEditorV2Form({
       courseIdForContext = id;
       const aboutFinal = await runStep("Saving About Course content", () => finalizeCourseAboutInlineImages(id));
       const saved = await runStep("Saving course details", () => saveCore(id, { aboutHtmlOverride: aboutFinal }));
-      await runStep("Saving members", () => saveMembers(id));
+      const membersSigBefore = getMembersSignature();
+      if (membersSigBefore !== savedMembersSignatureRef.current) {
+        await runStep("Saving members", () => saveMembers(id));
+      }
       await runStep("Uploading intro video", () => uploadIntroVideo(id));
-      await runStep("Updating thumbnail", async () => {
-        await removeThumbnailOnServer(id);
-        await uploadThumbnail(id);
-      });
+      if (pendingThumbnailRemoval || thumbnailFile) {
+        await runStep("Updating thumbnail", async () => {
+          await removeThumbnailOnServer(id);
+          await uploadThumbnail(id);
+        });
+      }
       const syncedTopics = await runStep("Saving chapters and lessons", () => syncCurriculumToServer(id));
       setTopics(syncedTopics);
       setPendingDeletedItemIds([]);
@@ -2288,6 +2420,7 @@ export function CourseEditorV2Form({
       const finalSlug = saved.slug ?? slug;
       setSlug(finalSlug);
       setStatus("draft");
+      savedMembersSignatureRef.current = getMembersSignature();
 
       // Mark as saved (used by leave-guard / unsaved banner).
       savedSnapshotRef.current = {
@@ -2328,6 +2461,8 @@ export function CourseEditorV2Form({
         videoUrl,
         thumbnailUrl,
         members: [...selectedMemberIds].sort(),
+        memberDefaultAccess,
+        memberAccessSig: [...selectedMemberIds].sort().map((id) => ({ id, access: memberAccessById[id] ?? memberDefaultAccess })),
         topicsSig: syncedTopics.map((t) => ({
           id: t.id,
           title: t.title,
@@ -2337,6 +2472,7 @@ export function CourseEditorV2Form({
             id: it.id,
             item_type: it.item_type,
             title: it.title ?? null,
+            is_required: Boolean((it as { is_required?: unknown }).is_required),
             position: it.position,
             payload_json: it.payload_json ?? {},
           })),
@@ -2408,12 +2544,17 @@ export function CourseEditorV2Form({
       courseIdForContext = id;
       const aboutFinal = await runStep("Saving About Course content", () => finalizeCourseAboutInlineImages(id));
       const saved = await runStep("Saving course details", () => saveCore(id, { aboutHtmlOverride: aboutFinal }));
-      await runStep("Saving members", () => saveMembers(id));
+      const membersSigBefore = getMembersSignature();
+      if (membersSigBefore !== savedMembersSignatureRef.current) {
+        await runStep("Saving members", () => saveMembers(id));
+      }
       await runStep("Uploading intro video", () => uploadIntroVideo(id));
-      await runStep("Updating thumbnail", async () => {
-        await removeThumbnailOnServer(id);
-        await uploadThumbnail(id);
-      });
+      if (pendingThumbnailRemoval || thumbnailFile) {
+        await runStep("Updating thumbnail", async () => {
+          await removeThumbnailOnServer(id);
+          await uploadThumbnail(id);
+        });
+      }
       const syncedTopics = await runStep("Saving chapters and lessons", () => syncCurriculumToServer(id));
       setTopics(syncedTopics);
       setPendingDeletedItemIds([]);
@@ -2428,6 +2569,7 @@ export function CourseEditorV2Form({
       const finalSlug = saved.slug ?? slug;
       setSlug(finalSlug);
       setStatus("published");
+      savedMembersSignatureRef.current = getMembersSignature();
 
       savedSnapshotRef.current = {
         courseId: id,
@@ -2467,6 +2609,8 @@ export function CourseEditorV2Form({
         videoUrl,
         thumbnailUrl,
         members: [...selectedMemberIds].sort(),
+        memberDefaultAccess,
+        memberAccessSig: [...selectedMemberIds].sort().map((id) => ({ id, access: memberAccessById[id] ?? memberDefaultAccess })),
         topicsSig: syncedTopics.map((t) => ({
           id: t.id,
           title: t.title,
@@ -2476,6 +2620,7 @@ export function CourseEditorV2Form({
             id: it.id,
             item_type: it.item_type,
             title: it.title ?? null,
+            is_required: Boolean((it as { is_required?: unknown }).is_required),
             position: it.position,
             payload_json: it.payload_json ?? {},
           })),

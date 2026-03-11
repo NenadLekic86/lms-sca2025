@@ -4,14 +4,6 @@ import { apiError, apiOk } from "@/lib/api/response";
 
 export const runtime = "nodejs";
 
-async function ensureLessonAssetsBucket(admin: ReturnType<typeof createAdminSupabaseClient>) {
-  const bucketId = "course-lesson-assets";
-  const { data, error } = await admin.storage.getBucket(bucketId);
-  if (!error && data?.id) return;
-  const create = await admin.storage.createBucket(bucketId, { public: false });
-  if (create.error) console.error("[lesson-assets] bucket ensure failed", create.error);
-}
-
 function safeFileName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 120) || "inline-image";
 }
@@ -34,7 +26,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   if (file.size > maxBytes) return apiError("VALIDATION_ERROR", "File too large (max 10MB).", { status: 400 });
 
   const admin = createAdminSupabaseClient();
-  await ensureLessonAssetsBucket(admin);
 
   const { data: course, error: courseError } = await admin.from("courses").select("id, organization_id").eq("id", id).single();
   if (courseError || !course?.id) return apiError("NOT_FOUND", "Course not found.", { status: 404 });
