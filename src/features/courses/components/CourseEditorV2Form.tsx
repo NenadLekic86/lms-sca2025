@@ -983,6 +983,11 @@ export function CourseEditorV2Form({
   const [expandedTopicIds, setExpandedTopicIds] = useState<Set<string>>(new Set());
 
   const [isBusy, setIsBusy] = useState(false);
+  type BusyAction = "save_published" | "save_draft" | "publish";
+  const [busyAction, setBusyAction] = useState<BusyAction | null>(null);
+  const busyActionRef = useRef<BusyAction | null>(null);
+  const [busyStep, setBusyStep] = useState<string | null>(null);
+  const [busyVisitedSteps, setBusyVisitedSteps] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [errorStep, setErrorStep] = useState<string | null>(null);
   const [errorSupportId, setErrorSupportId] = useState<string | null>(null);
@@ -2113,6 +2118,10 @@ export function CourseEditorV2Form({
   }
 
   async function runStep<T>(step: string, fn: () => Promise<T>): Promise<T> {
+    if (busyActionRef.current) {
+      setBusyStep(step);
+      setBusyVisitedSteps((prev) => (prev.includes(step) ? prev : [...prev, step]));
+    }
     try {
       return await fn();
     } catch (e) {
@@ -2239,6 +2248,12 @@ export function CourseEditorV2Form({
   async function savePublished(opts?: { afterSuccessNavigateTo?: string; showSuccessModal?: boolean; silent?: boolean }) {
     setError(null);
     setIsBusy(true);
+    if (!(opts?.silent ?? false)) {
+      busyActionRef.current = "save_published";
+      setBusyAction("save_published");
+      setBusyStep(null);
+      setBusyVisitedSteps([]);
+    }
     let courseIdForContext: string | null = null;
     try {
       const id = await runStep("Preparing course", () => ensureCourseDraftExists());
@@ -2383,12 +2398,22 @@ export function CourseEditorV2Form({
       });
     } finally {
       setIsBusy(false);
+      busyActionRef.current = null;
+      setBusyAction(null);
+      setBusyStep(null);
+      setBusyVisitedSteps([]);
     }
   }
 
   async function saveDraft(opts?: { afterSuccessNavigateTo?: string; showSuccessModal?: boolean; silent?: boolean }) {
     setError(null);
     setIsBusy(true);
+    if (!(opts?.silent ?? false)) {
+      busyActionRef.current = "save_draft";
+      setBusyAction("save_draft");
+      setBusyStep(null);
+      setBusyVisitedSteps([]);
+    }
     let courseIdForContext: string | null = null;
     try {
       const id = await runStep("Preparing course", () => ensureCourseDraftExists());
@@ -2531,12 +2556,20 @@ export function CourseEditorV2Form({
       });
     } finally {
       setIsBusy(false);
+      busyActionRef.current = null;
+      setBusyAction(null);
+      setBusyStep(null);
+      setBusyVisitedSteps([]);
     }
   }
 
   async function publishCourse(opts?: { afterSuccessNavigateTo?: string; showSuccessModal?: boolean }) {
     setError(null);
     setIsBusy(true);
+    busyActionRef.current = "publish";
+    setBusyAction("publish");
+    setBusyStep(null);
+    setBusyVisitedSteps([]);
     const wasPublished = status === "published";
     let courseIdForContext: string | null = null;
     try {
@@ -2676,6 +2709,10 @@ export function CourseEditorV2Form({
       });
     } finally {
       setIsBusy(false);
+      busyActionRef.current = null;
+      setBusyAction(null);
+      setBusyStep(null);
+      setBusyVisitedSteps([]);
     }
   }
 
@@ -4592,6 +4629,94 @@ export function CourseEditorV2Form({
                   Unpublish &amp; save draft
                 </Button>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isBusy && busyAction ? (
+        <div className="fixed inset-0 z-1000 bg-black/40 backdrop-blur-sm p-4 sm:p-6 overflow-y-auto" data-leave-guard-ignore="true">
+          <div className="min-h-[calc(100svh-2rem)] sm:min-h-[calc(100svh-3rem)] flex items-center justify-center">
+            <div className="w-full max-w-md rounded-2xl border bg-card shadow-2xl px-6 py-6">
+              {(() => {
+                const steps =
+                  busyAction === "publish"
+                    ? [
+                        "Preparing course",
+                        "Saving About Course content",
+                        "Saving course details",
+                        "Saving members",
+                        "Uploading intro video",
+                        "Updating thumbnail",
+                        "Saving chapters and lessons",
+                        "Publishing course",
+                      ]
+                    : [
+                        "Preparing course",
+                        "Saving About Course content",
+                        "Saving course details",
+                        "Saving members",
+                        "Uploading intro video",
+                        "Updating thumbnail",
+                        "Saving chapters and lessons",
+                        "Finalizing save",
+                      ];
+
+                const title =
+                  busyAction === "publish" ? "Publishing course…" : busyAction === "save_draft" ? "Saving draft…" : "Saving changes…";
+
+                const doneCount = steps.filter((s) => busyVisitedSteps.includes(s)).length;
+                const pct = steps.length ? Math.min(100, Math.max(0, Math.round((doneCount / steps.length) * 100))) : 0;
+
+                return (
+                  <>
+                    <div className="flex items-start gap-4">
+                      <div className="mt-0.5 h-12 w-12 rounded-2xl bg-linear-to-br from-[#F58131] to-[#FF9A52] text-white flex items-center justify-center ring-8 ring-[#F58131]/15">
+                        <Loader2 className="h-6 w-6 animate-spin" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-base font-semibold tracking-tight">{title}</p>
+                        <p className="mt-1 text-sm text-muted-foreground">{busyStep ?? "Starting…"}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 h-2 w-full rounded-full bg-muted overflow-hidden">
+                      <div
+                        className="h-full bg-linear-to-r from-[#F58131] to-[#FF9A52] transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+
+                    <div className="mt-5 space-y-2">
+                      {steps.map((s) => {
+                        const isActive = s === busyStep;
+                        const isDone = !isActive && busyVisitedSteps.includes(s);
+                        return (
+                          <div key={s} className="flex items-center gap-2 text-sm">
+                            <div
+                              className={cn(
+                                "h-5 w-5 rounded-full flex items-center justify-center border",
+                                isDone
+                                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700"
+                                  : isActive
+                                    ? "bg-[#F58131]/10 border-[#F58131]/30 text-[#F58131]"
+                                    : "bg-muted border-border text-muted-foreground"
+                              )}
+                            >
+                              {isDone ? <Check className="h-3.5 w-3.5" /> : isActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                            </div>
+                            <span className={cn(isActive ? "font-medium text-foreground" : isDone ? "text-foreground" : "text-muted-foreground")}>
+                              {s}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <p className="mt-5 text-xs text-muted-foreground">Please don’t close this tab while saving.</p>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>
