@@ -6,7 +6,7 @@ import { BookOpen, CalendarDays, ChevronRight, Clock, Building2, User, X, BadgeC
 import { HelpText } from "@/components/table-v2/controls";
 import { useBodyScrollLock, useEscClose, useMountedForAnimation } from "@/components/table-v2/hooks";
 
-export type EnrollmentResultV2 = "passed" | "failed" | "not_submitted" | null;
+export type EnrollmentResultV2 = "certified" | "not_certified" | null;
 
 export type RecentEnrollmentItemV2 = {
   id: string;
@@ -17,46 +17,19 @@ export type RecentEnrollmentItemV2 = {
 
   result: EnrollmentResultV2;
   enrollmentStatus?: string | null;
-  testTitle?: string | null;
-
-  attemptCount?: number | null;
-  submittedCount?: number | null;
-  totalDurationSeconds?: number | null;
-  latestAttemptDurationSeconds?: number | null;
-  latestScore?: number | null;
-
   enrolledAt?: string | null;
-  latestStartedAt?: string | null;
-  latestSubmittedAt?: string | null;
+  certificateIssuedAt?: string | null;
 
   meta?: unknown;
 };
 
-function formatDurationSeconds(seconds: number | null | undefined): string {
-  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return "—";
-  const s = Math.floor(seconds);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${sec}s`;
-  return `${sec}s`;
-}
-
-function formatScore(score: number | null | undefined): string {
-  if (typeof score !== "number" || !Number.isFinite(score)) return "—";
-  return `${Math.round(score)}%`;
-}
-
 function ResultPill({ result }: { result: EnrollmentResultV2 }) {
-  const r = result ?? "not_submitted";
-  const label = r === "passed" ? "Passed" : r === "failed" ? "Failed" : "Not Submitted";
+  const r = result ?? "not_certified";
+  const label = r === "certified" ? "Certified" : "Not certified";
   const cls =
-    r === "passed"
+    r === "certified"
       ? "bg-green-100 text-green-800"
-      : r === "failed"
-        ? "bg-red-100 text-red-800"
-        : "bg-gray-100 text-gray-800";
+      : "bg-gray-100 text-gray-800";
   return <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${cls}`}>{label}</span>;
 }
 
@@ -197,13 +170,10 @@ function RecentEnrollmentDetailsDrawer({
   }, []);
 
   const show = open && entered;
-  const attempts = `${item.submittedCount ?? 0} / ${item.attemptCount ?? 0}`;
-  const totalTime = formatDurationSeconds(item.totalDurationSeconds);
-  const latestTime = formatDurationSeconds(item.latestAttemptDurationSeconds);
-  const latestScore = formatScore(item.latestScore);
 
-  const ResultIcon = (item.result ?? "not_submitted") === "passed" ? BadgeCheck : (item.result ?? "not_submitted") === "failed" ? BadgeX : Clock;
-  const resultLabel = (item.result ?? "not_submitted") === "passed" ? "Passed" : (item.result ?? "not_submitted") === "failed" ? "Failed" : "Not Submitted";
+  const isCertified = (item.result ?? "not_certified") === "certified";
+  const ResultIcon = isCertified ? BadgeCheck : BadgeX;
+  const resultLabel = isCertified ? "Certificate issued" : "No certificate yet";
 
   return (
     <div className="fixed inset-0 z-100000" role="dialog" aria-modal="true" onClick={onClose}>
@@ -274,7 +244,7 @@ function RecentEnrollmentDetailsDrawer({
               <div className="flex items-start justify-between gap-4">
                 <span className="inline-flex items-center gap-2 text-muted-foreground">
                   <ResultIcon className="h-4 w-4" />
-                  Result
+                  Certificate
                 </span>
                 <div className="text-right space-y-1">
                   <ResultPill result={item.result} />
@@ -284,42 +254,10 @@ function RecentEnrollmentDetailsDrawer({
             </div>
           </div>
 
-          {/* Metrics */}
-          <div className="space-y-3">
-            <div className="text-xl font-semibold text-foreground">Metrics</div>
-            <div className="rounded-xl border bg-background p-5 text-sm">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="rounded-lg border bg-muted/20 p-4">
-                  <div className="text-xs text-muted-foreground">Attempts (submitted / total)</div>
-                  <div className="mt-1 text-lg font-semibold tabular-nums">{attempts}</div>
-                </div>
-                <div className="rounded-lg border bg-muted/20 p-4">
-                  <div className="text-xs text-muted-foreground">Latest score</div>
-                  <div className="mt-1 text-lg font-semibold tabular-nums">{latestScore}</div>
-                </div>
-                <div className="rounded-lg border bg-muted/20 p-4">
-                  <div className="text-xs text-muted-foreground">Total time</div>
-                  <div className="mt-1 text-lg font-semibold tabular-nums">{totalTime}</div>
-                </div>
-                <div className="rounded-lg border bg-muted/20 p-4">
-                  <div className="text-xs text-muted-foreground">Latest time</div>
-                  <div className="mt-1 text-lg font-semibold tabular-nums">{latestTime}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
           {/* Info */}
           <div className="space-y-3">
             <div className="text-xl font-semibold text-foreground">Info</div>
             <div className="rounded-xl border bg-background p-5 space-y-3 text-sm">
-              {item.testTitle ? (
-                <div className="flex items-start justify-between gap-4">
-                  <span className="text-muted-foreground">Test</span>
-                  <span className="text-foreground text-right wrap-break-word">{item.testTitle}</span>
-                </div>
-              ) : null}
-
               {item.enrollmentStatus ? (
                 <div className="flex items-start justify-between gap-4">
                   <span className="text-muted-foreground">Enrollment status</span>
@@ -327,17 +265,17 @@ function RecentEnrollmentDetailsDrawer({
                 </div>
               ) : null}
 
-              {item.latestStartedAt ? (
+              {item.enrolledAt ? (
                 <div className="flex items-start justify-between gap-4">
-                  <span className="text-muted-foreground">Latest started</span>
-                  <span className="text-foreground text-right">{new Date(item.latestStartedAt).toLocaleString()}</span>
+                  <span className="text-muted-foreground">Enrolled</span>
+                  <span className="text-foreground text-right">{new Date(item.enrolledAt).toLocaleString()}</span>
                 </div>
               ) : null}
 
-              {item.latestSubmittedAt ? (
+              {item.certificateIssuedAt ? (
                 <div className="flex items-start justify-between gap-4">
-                  <span className="text-muted-foreground">Latest submitted</span>
-                  <span className="text-foreground text-right">{new Date(item.latestSubmittedAt).toLocaleString()}</span>
+                  <span className="text-muted-foreground">Certificate issued</span>
+                  <span className="text-foreground text-right">{new Date(item.certificateIssuedAt).toLocaleString()}</span>
                 </div>
               ) : null}
             </div>

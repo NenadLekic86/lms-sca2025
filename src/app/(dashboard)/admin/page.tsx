@@ -148,7 +148,6 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
   const orgIds = new Set<string>();
   const userIds = new Set<string>();
   const courseIds = new Set<string>();
-  const testIds = new Set<string>();
 
   for (const row of auditRows) {
     const meta = asRecord(row.metadata);
@@ -208,18 +207,6 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
       row.entity_id.length > 0
     ) {
       courseIds.add(row.entity_id);
-    }
-
-    // Tests (subjects / details)
-    if (row.entity === "tests" && typeof row.entity_id === "string" && row.entity_id.length > 0) {
-      testIds.add(row.entity_id);
-    }
-    if (row.action === "update_test_builder" && typeof row.entity_id === "string" && row.entity_id.length > 0) {
-      testIds.add(row.entity_id);
-    }
-    if (row.action === "create_course_test") {
-      const tid = getMetaString(meta, "test_id");
-      if (tid) testIds.add(tid);
     }
   }
 
@@ -301,50 +288,6 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
     if (!courseId) return "Unknown course";
     return courseLabelById.get(courseId) ?? "Unknown course";
   };
-
-  const testLabelById = new Map<string, string>();
-  const testCourseById = new Map<string, string | null>();
-  if (testIds.size > 0) {
-    const { data: testsData, error: testsError } = await admin
-      .from("tests")
-      .select("id, title, course_id")
-      .in("id", Array.from(testIds));
-
-    if (!testsError && Array.isArray(testsData)) {
-      for (const t of testsData as Array<{ id?: unknown; title?: unknown; course_id?: unknown }>) {
-        const id = typeof t.id === "string" ? t.id : null;
-        if (!id) continue;
-        const title = typeof t.title === "string" && t.title.trim().length ? t.title.trim() : null;
-        const courseId = typeof t.course_id === "string" && t.course_id.length > 0 ? t.course_id : null;
-        testLabelById.set(id, title ?? "Untitled test");
-        testCourseById.set(id, courseId);
-      }
-    }
-  }
-
-  const testLabel = (testId: string | null) => {
-    if (!testId) return "Unknown test";
-    return testLabelById.get(testId) ?? "Unknown test";
-  };
-
-  // If tests referenced a course_id we didn't already fetch, hydrate those course titles too.
-  const courseIdsFromTests = Array.from(new Set(Array.from(testCourseById.values()).filter((v): v is string => typeof v === "string" && v.length > 0)));
-  const missingCourseIds = courseIdsFromTests.filter((id) => !courseLabelById.has(id));
-  if (missingCourseIds.length > 0) {
-    const { data: moreCourses, error: moreCoursesError } = await admin
-      .from("courses")
-      .select("id, title")
-      .in("id", missingCourseIds);
-
-    if (!moreCoursesError && Array.isArray(moreCourses)) {
-      for (const c of moreCourses as Array<{ id?: unknown; title?: unknown }>) {
-        const id = typeof c.id === "string" ? c.id : null;
-        if (!id) continue;
-        const title = typeof c.title === "string" && c.title.trim().length ? c.title.trim() : null;
-        courseLabelById.set(id, title ?? "Untitled course");
-      }
-    }
-  }
 
   const getDetails = (row: AuditLogRow) => {
     const meta = asRecord(row.metadata);
@@ -483,17 +426,14 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
     if (row.action === "create_course_test") {
       const courseId = typeof row.entity_id === "string" && row.entity_id.length > 0 ? row.entity_id : null;
       const tid = getMetaString(meta, "test_id");
-      const tName = tid ? testLabel(tid) : "Assessment";
-      return `${actorDisplay} created ${tName} for ${courseLabel(courseId)}.`;
+      return `${actorDisplay} created a legacy assessment${tid ? ` (${tid})` : ""} for ${courseLabel(courseId)}.`;
     }
 
     if (row.action === "update_test_builder") {
       const testId = typeof row.entity_id === "string" && row.entity_id.length > 0 ? row.entity_id : null;
       const count = getMetaNumber(meta, "questions");
       const countText = typeof count === "number" ? ` (${count} questions)` : "";
-      const cId = testId ? (testCourseById.get(testId) ?? null) : null;
-      const courseText = cId ? ` for ${courseLabel(cId)}` : "";
-      return `${actorDisplay} updated test builder${countText}: ${testLabel(testId)}${courseText}.`;
+      return `${actorDisplay} updated a legacy assessment${countText}${testId ? ` (${testId})` : ""}.`;
     }
 
     return "—";
@@ -562,12 +502,12 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
       return `organizations (${orgLabel(row.entity_id)})`;
     }
 
-    // Tests
+    // Legacy tests (feature removed)
     if (row.entity === "tests" && typeof row.entity_id === "string" && row.entity_id.length > 0) {
-      return `tests (${testLabel(row.entity_id)})`;
+      return `tests (${row.entity_id})`;
     }
     if (row.action === "update_test_builder" && typeof row.entity_id === "string" && row.entity_id.length > 0) {
-      return `tests (${testLabel(row.entity_id)})`;
+      return `tests (${row.entity_id})`;
     }
 
     // Courses

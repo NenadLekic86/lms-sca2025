@@ -4,7 +4,6 @@ import { BookOpen } from "lucide-react";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { CourseLearnClient } from "@/features/courses/components/CourseLearnClient";
 import { CourseLearnV2Client, type LearnV2Topic } from "@/features/courses/components/v2";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 import { sanitizeRichHtml } from "@/lib/courses/sanitize.server";
@@ -18,27 +17,6 @@ type CourseRow = {
   is_published: boolean | null;
   builder_version?: number | null;
   organization_id?: string | null;
-};
-
-type ResourceRow = {
-  id: string;
-  file_name: string;
-  mime_type: string;
-  size_bytes: number;
-};
-
-type VideoRow = {
-  id: string;
-  original_url: string;
-  embed_url: string | null;
-  title: string | null;
-  provider: string | null;
-};
-
-type ProgressRow = {
-  item_type: "resource" | "video";
-  item_id: string;
-  completed_at: string | null;
 };
 
 function isUuidLike(input: string): boolean {
@@ -416,52 +394,7 @@ export default async function CourseLearnPage({
     );
   }
 
-  // Legacy (V1) learning flow - keep until V2 is fully done.
-  const [{ data: resources }, { data: videos }, { data: progress }] = await Promise.all([
-    supabase
-      .from("course_resources")
-      .select("id, file_name, mime_type, size_bytes")
-      .eq("course_id", courseId)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("course_videos")
-      .select("id, original_url, embed_url, title, provider")
-      .eq("course_id", courseId)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("course_content_progress")
-      .select("item_type, item_id, completed_at")
-      .eq("course_id", courseId)
-      .eq("user_id", user.id),
-  ]);
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <BookOpen className="h-8 w-8 text-primary" />
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Course learning</h1>
-            <p className="text-muted-foreground">{courseTitle}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" asChild>
-            <Link href={`/org/${orgSlug}/courses/${courseHrefKey}`}>Back</Link>
-          </Button>
-        </div>
-      </div>
-
-      <CourseLearnClient
-        orgId={orgSlug}
-        courseId={courseId}
-        courseHrefKey={courseHrefKey}
-        courseTitle={courseTitle}
-        resources={(Array.isArray(resources) ? resources : []) as ResourceRow[]}
-        videos={(Array.isArray(videos) ? videos : []) as VideoRow[]}
-        initialProgress={(Array.isArray(progress) ? progress : []) as ProgressRow[]}
-      />
-    </div>
-  );
+  // Legacy (V1) learning flow is removed; V2-only learning is supported.
+  redirect(`/org/${orgSlug}/courses/${courseHrefKey}`);
 }
 

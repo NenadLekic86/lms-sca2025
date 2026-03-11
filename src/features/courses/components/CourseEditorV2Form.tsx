@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronUp,
+  Image as ImageIcon,
   ExternalLink,
   Eye,
   FileText,
@@ -30,9 +31,11 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { fetchJson } from "@/lib/api";
+import { ApiClientError, fetchJson } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { normalizeSlug } from "@/lib/courses/v2.shared";
+import { supabase } from "@/lib/supabase/client";
+import { generateSupportId } from "@/lib/support/supportId";
 import {
   ACCESS_DURATION_KEYS,
   accessKeyLabel,
@@ -95,6 +98,17 @@ export type CourseV2 = {
   assigned_member_access?: Record<string, AccessDurationKey>;
   assigned_member_expires_at?: Record<string, string | null>;
 };
+
+class StepError extends Error {
+  readonly step: string;
+  readonly cause: unknown;
+  constructor(step: string, cause: unknown) {
+    super(step);
+    this.name = "StepError";
+    this.step = step;
+    this.cause = cause;
+  }
+}
 
 type SaveResultCourse = {
   id: string;
@@ -887,7 +901,6 @@ export function CourseEditorV2Form({
 
   const [courseId, setCourseId] = useState<string | null>(initialCourse?.id ?? null);
   const [status, setStatus] = useState<"draft" | "published">(initialCourse?.status === "published" ? "published" : "draft");
-  const [needsRepublish, setNeedsRepublish] = useState(false);
   const [pendingDeletedTopicIds, setPendingDeletedTopicIds] = useState<string[]>([]);
   const [pendingDeletedItemIds, setPendingDeletedItemIds] = useState<string[]>([]);
   const [pendingLessonUploadsByItemId, setPendingLessonUploadsByItemId] = useState<Record<string, PendingLessonUploads>>({});
@@ -961,10 +974,26 @@ export function CourseEditorV2Form({
 
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorStep, setErrorStep] = useState<string | null>(null);
+  const [errorSupportId, setErrorSupportId] = useState<string | null>(null);
+  const [errorCanReport, setErrorCanReport] = useState(false);
+  const [errorReportPayload, setErrorReportPayload] = useState<Record<string, unknown> | null>(null);
+  const [errorReportSending, setErrorReportSending] = useState(false);
+  const [errorReportSent, setErrorReportSent] = useState(false);
   const [successModal, setSuccessModal] = useState<{ title: string; description: string } | null>(null);
   const [activeMainTab, setActiveMainTab] = useState<MainEditorTab>("information");
   const [origin, setOrigin] = useState("");
   const [dndReady, setDndReady] = useState(false);
+
+  useEffect(() => {
+    if (error !== null) return;
+    setErrorStep(null);
+    setErrorSupportId(null);
+    setErrorCanReport(false);
+    setErrorReportPayload(null);
+    setErrorReportSending(false);
+    setErrorReportSent(false);
+  }, [error]);
 
   const [topicModal, setTopicModal] = useState<{ mode: "create" | "edit"; topicId: string | null; title: string; summary: string } | null>(null);
   const [itemModal, setItemModal] = useState<ItemModalState | null>(null);
@@ -992,7 +1021,6 @@ export function CourseEditorV2Form({
       const nextBlocks = [...(prev.contentBlocks ?? []), { id: makeBlockId(), html: "" }];
       return { ...prev, contentBlocks: nextBlocks };
     });
-    if (status === "published") setNeedsRepublish(true);
   }
 
   function removeLessonContentBlock(blockId: string) {
@@ -1002,7 +1030,6 @@ export function CourseEditorV2Form({
       const nextInline = pruneQueueByBlocksWithRevoke(prev.inlineImages ?? {}, nextBlocks);
       return { ...prev, contentBlocks: nextBlocks, inlineImages: nextInline };
     });
-    if (status === "published") setNeedsRepublish(true);
   }
 
   function onLessonBlocksDragEnd(event: DragEndEvent) {
@@ -1014,7 +1041,6 @@ export function CourseEditorV2Form({
       const nextBlocks = reorderBlocks(blocks, String(active.id), String(over.id));
       return { ...prev, contentBlocks: nextBlocks };
     });
-    if (status === "published") setNeedsRepublish(true);
   }
 
   const savedSnapshotRef = useRef<{
@@ -1177,6 +1203,30 @@ export function CourseEditorV2Form({
 
   const hasUnsavedChanges = currentSignature !== savedSignatureRef.current;
 
+  // Autosave: every 5 minutes, persist the same pipeline as Save (silent).
+  const autosaveCallbackRef = useRef<(() => void) | null>(null);
+  const saveDraftRef = useRef(saveDraft);
+  const savePublishedRef = useRef(savePublished);
+  saveDraftRef.current = saveDraft;
+  savePublishedRef.current = savePublished;
+
+  useEffect(() => {
+    autosaveCallbackRef.current = () => {
+      if (!hasUnsavedChanges) return;
+      if (isBusy) return;
+      // Avoid creating a draft course without a minimally valid title.
+      if (!courseId && title.trim().length < 2) return;
+      void (status === "published" ? savePublishedRef.current({ silent: true }) : saveDraftRef.current({ silent: true }));
+    };
+  }, [courseId, hasUnsavedChanges, isBusy, status, title]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      autosaveCallbackRef.current?.();
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
   useEffect(() => {
     setOrigin(window.location.origin);
   }, []);
@@ -1184,10 +1234,6 @@ export function CourseEditorV2Form({
   useEffect(() => {
     setDndReady(true);
   }, []);
-
-  useEffect(() => {
-    if (status !== "published") setNeedsRepublish(false);
-  }, [status]);
 
   async function loadCertificateSettingsAndTemplate(courseIdToUse: string) {
     setCertLoading(true);
@@ -1230,8 +1276,6 @@ export function CourseEditorV2Form({
       setCertTitle(String(s.certificate_title ?? ""));
       setCertPassingPercent(Number.isFinite(Number(s.course_passing_grade_percent)) ? Number(s.course_passing_grade_percent) : 0);
       setCertPlacement((s.name_placement_json as CertificateNamePlacement | null) ?? null);
-
-      if (status === "published") setNeedsRepublish(true);
       toast.success("Certificate settings saved.");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save certificate settings.");
@@ -1249,7 +1293,6 @@ export function CourseEditorV2Form({
       setCertTplFile(null);
       await loadCertificateSettingsAndTemplate(courseIdToUse);
       toast.success("Certificate template uploaded.");
-      if (status === "published") setNeedsRepublish(true);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to upload certificate template.");
     } finally {
@@ -1264,7 +1307,6 @@ export function CourseEditorV2Form({
       await fetchJson<Record<string, unknown>>(`/api/courses/${courseIdToUse}/certificate-template`, { method: "DELETE" });
       await loadCertificateSettingsAndTemplate(courseIdToUse);
       toast.success("Certificate template removed.");
-      if (status === "published") setNeedsRepublish(true);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to remove certificate template.");
     } finally {
@@ -1289,12 +1331,6 @@ export function CourseEditorV2Form({
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [hasUnsavedChanges]);
-
-  useEffect(() => {
-    // Any unsaved changes on a published course require republish to be visible to members.
-    if (status !== "published") return;
-    if (hasUnsavedChanges) setNeedsRepublish(true);
-  }, [hasUnsavedChanges, status]);
 
   useEffect(() => {
     function onDocumentClickCapture(e: MouseEvent) {
@@ -1337,7 +1373,6 @@ export function CourseEditorV2Form({
     revokeInlineQueueObjectUrls(pendingCourseAboutInlineImages ?? {});
     setCourseId(snap.courseId);
     setStatus(snap.status);
-    setNeedsRepublish(false);
     setTitle(snap.title);
     setSlug(snap.slug);
     setIsSlugManuallyEdited(snap.isSlugManuallyEdited);
@@ -1431,7 +1466,6 @@ export function CourseEditorV2Form({
         return { ...t, items: nextItems.map((it, idx) => ({ ...it, position: idx })) };
       })
     );
-    if (status === "published") setNeedsRepublish(true);
   };
 
   const setTopicExpanded = (id: string, expanded: boolean) => {
@@ -1537,7 +1571,7 @@ export function CourseEditorV2Form({
 
   async function syncCurriculumToServer(courseIdToUse: string): Promise<CourseTopic[]> {
     // This applies ALL local Course Builder changes (create/edit/reorder/delete + lesson assets)
-    // in one explicit Save Draft / Publish / Republish action.
+    // in one explicit Save / Publish action.
     const topicIdMap = new Map<string, string>();
     const itemIdMap = new Map<string, string>();
 
@@ -1636,25 +1670,60 @@ export function CourseEditorV2Form({
           const video = (p.video ?? {}) as { provider?: unknown };
           const provider = video?.provider === "youtube" || video?.provider === "vimeo" ? (video.provider as string) : "html5";
           if (provider === "html5" && pendingUploads.videoFile) {
-            const form = new FormData();
-            form.append("file", pendingUploads.videoFile);
-            const { data } = await fetchJson<{ storage_path: string }>(`/api/v2/items/${resolvedItemId}/lesson/video`, { method: "POST", body: form });
-            videoStoragePath = data.storage_path;
+            const file = pendingUploads.videoFile;
+            const { data: sign } = await fetchJson<{ bucket_id: string; object_name: string; token: string }>(
+              `/api/v2/items/${resolvedItemId}/lesson/video/sign`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mime: "video/mp4", size_bytes: file.size }),
+              }
+            );
+            const uploadRes = await supabase.storage.from(sign.bucket_id).uploadToSignedUrl(sign.object_name, sign.token, file, {
+              contentType: file.type,
+            });
+            if (uploadRes.error) throw new Error(`Lesson video upload failed: ${uploadRes.error.message}`);
+            videoStoragePath = sign.object_name;
           }
 
           let uploadedAttachments = Array.isArray((p as { attachments?: unknown }).attachments) ? ((p as { attachments: unknown[] }).attachments as unknown[]) : [];
           if (pendingUploads.attachments?.length) {
-            const form = new FormData();
-            for (const f of pendingUploads.attachments) form.append("files", f);
-            const { data } = await fetchJson<{ attachments: LessonModalState["existingAttachments"] }>(`/api/v2/items/${resolvedItemId}/lesson/attachments`, {
+            const files = pendingUploads.attachments;
+            const { data: signed } = await fetchJson<{
+              bucket_id: string;
+              uploads: Array<{ file_name: string; mime: string | null; size_bytes: number; object_name: string; token: string }>;
+            }>(`/api/v2/items/${resolvedItemId}/lesson/attachments/sign`, {
               method: "POST",
-              body: form,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                files: files.map((f) => ({ file_name: f.name, mime: f.type || null, size_bytes: f.size })),
+              }),
             });
-            uploadedAttachments = [...uploadedAttachments, ...(data.attachments ?? [])];
+
+            for (let i = 0; i < files.length; i++) {
+              const file = files[i];
+              const u = signed.uploads[i];
+              if (!u) throw new Error("Attachment signing mismatch.");
+              const up = await supabase.storage.from(signed.bucket_id).uploadToSignedUrl(u.object_name, u.token, file, {
+                contentType: file.type || "application/octet-stream",
+              });
+              if (up.error) throw new Error(`Attachment upload failed: ${up.error.message}`);
+            }
+
+            const newAttachments: LessonModalState["existingAttachments"] = signed.uploads.map((u, idx) => {
+              const f = files[idx];
+              return {
+                file_name: f?.name ?? u.file_name,
+                storage_path: u.object_name,
+                size_bytes: f?.size ?? u.size_bytes,
+                mime: (f?.type || u.mime || null) as string | null,
+              };
+            });
+            uploadedAttachments = [...uploadedAttachments, ...newAttachments];
           }
 
           // Upload inline images referenced inside lesson HTML blocks, then rewrite <img src> to a stable app URL.
-          // This keeps the "no auto-save" rule: we only upload + persist on explicit Save Draft / Publish / Republish.
+          // This keeps the "no auto-save" rule: we only upload + persist on explicit Save / Publish.
           const rawBlocks = Array.isArray((basePayload as { content_blocks?: unknown }).content_blocks)
             ? ((basePayload as { content_blocks: unknown[] }).content_blocks as unknown[])
             : null;
@@ -1817,10 +1886,28 @@ export function CourseEditorV2Form({
   async function uploadIntroVideo(courseIdToUse: string) {
     if (videoProvider === "html5") {
       if (!videoFile) return;
-      const form = new FormData();
-      form.append("provider", "html5");
-      form.append("file", videoFile);
-      await fetchJson(`/api/v2/courses/${courseIdToUse}/intro-video`, { method: "POST", body: form });
+      const { data: sign } = await fetchJson<{ bucket_id: string; object_name: string; token: string }>(
+        `/api/v2/courses/${courseIdToUse}/intro-video/sign`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mime: "video/mp4", size_bytes: videoFile.size }),
+        }
+      );
+
+      const uploadRes = await supabase.storage.from(sign.bucket_id).uploadToSignedUrl(sign.object_name, sign.token, videoFile, {
+        contentType: videoFile.type,
+      });
+      if (uploadRes.error) {
+        throw new Error(`Intro video upload failed: ${uploadRes.error.message}`);
+      }
+
+      await fetchJson(`/api/v2/courses/${courseIdToUse}/intro-video/commit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storage_path: sign.object_name, mime: "video/mp4", size_bytes: videoFile.size }),
+      });
+
       setVideoFile(null);
       return;
     }
@@ -1838,13 +1925,12 @@ export function CourseEditorV2Form({
       toast.error("Invalid video type. Allowed: MP4.");
       return;
     }
-    const maxBytes = 50 * 1024 * 1024;
+    const maxBytes = 300 * 1024 * 1024;
     if (file.size > maxBytes) {
-      toast.error("Video is too large. Max size is 50MB.");
+      toast.error("Video is too large. Max size is 300MB.");
       return;
     }
     setVideoFile(file);
-    if (status === "published") setNeedsRepublish(true);
   }
 
   async function uploadThumbnail(courseIdToUse: string) {
@@ -1867,6 +1953,101 @@ export function CourseEditorV2Form({
     setThumbnailFile(null);
   }
 
+  async function runStep<T>(step: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      throw new StepError(step, e);
+    }
+  }
+
+  function setErrorWithSupport(opts: {
+    message: string;
+    step?: string | null;
+    supportId?: string | null;
+    canReport: boolean;
+    reportPayload?: Record<string, unknown> | null;
+  }) {
+    setError(opts.message);
+    setErrorStep(opts.step ?? null);
+    setErrorSupportId(opts.supportId ?? null);
+    setErrorCanReport(opts.canReport);
+    setErrorReportPayload(opts.reportPayload ?? null);
+    setErrorReportSent(false);
+  }
+
+  function normalizeStepError(e: unknown): {
+    step: string | null;
+    cause: unknown;
+    api: ApiClientError | null;
+  } {
+    const step = e instanceof StepError ? e.step : null;
+    const cause = e instanceof StepError ? e.cause : e;
+    const api = cause instanceof ApiClientError ? cause : null;
+    return { step, cause, api };
+  }
+
+  function isReportableSystemError(info: { api: ApiClientError | null; cause: unknown }): boolean {
+    if (info.api) return info.api.status >= 500 || info.api.code === "INTERNAL";
+    const msg = info.cause instanceof Error ? info.cause.message : String(info.cause ?? "");
+    const m = msg.toLowerCase();
+    return m.includes("request failed") || m.includes("failed to fetch") || m.includes("network");
+  }
+
+  function buildReportPayload(input: {
+    supportId: string;
+    step: string | null;
+    context: Record<string, unknown>;
+    cause: unknown;
+    api: ApiClientError | null;
+  }): Record<string, unknown> {
+    const err = input.cause instanceof Error ? input.cause : null;
+    return {
+      support_id: input.supportId,
+      source: "course_builder_v2",
+      step: input.step,
+      page_url: typeof window !== "undefined" ? window.location.href : null,
+      user_agent: typeof navigator !== "undefined" ? navigator.userAgent : null,
+      payload: {
+        context: input.context,
+        error: {
+          name: err?.name ?? null,
+          message: err?.message ?? String(input.cause ?? ""),
+          stack: err?.stack ?? null,
+        },
+        api: input.api
+          ? {
+              status: input.api.status,
+              code: input.api.code ?? null,
+              support_id: input.api.supportId ?? null,
+              raw: input.api.raw ?? null,
+            }
+          : null,
+      },
+    };
+  }
+
+  async function reportCurrentError() {
+    if (!errorReportPayload || errorReportSending || errorReportSent) return;
+    setErrorReportSending(true);
+    try {
+      const { data } = await fetchJson<{ support_report_id: string; support_id: string }>(`/api/v2/support/report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(errorReportPayload),
+      });
+      setErrorReportSent(true);
+      if (!errorSupportId && typeof data.support_id === "string") {
+        setErrorSupportId(data.support_id);
+      }
+      toast.success("Error reported to Support.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to report error.");
+    } finally {
+      setErrorReportSending(false);
+    }
+  }
+
   function applyThumbnailFile(file: File | null) {
     if (!file) return;
     const allowed = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -1881,7 +2062,6 @@ export function CourseEditorV2Form({
     }
     setPendingThumbnailRemoval(false);
     setThumbnailFile(file);
-    if (status === "published") setNeedsRepublish(true);
   }
 
   function removeThumbnailLocal() {
@@ -1895,21 +2075,24 @@ export function CourseEditorV2Form({
     setThumbnailFile(null);
     setThumbnailUrl("");
     setPendingThumbnailRemoval(true);
-    if (status === "published") setNeedsRepublish(true);
   }
 
-  async function saveDraft(opts?: { afterSuccessNavigateTo?: string; showSuccessModal?: boolean }) {
+  async function savePublished(opts?: { afterSuccessNavigateTo?: string; showSuccessModal?: boolean; silent?: boolean }) {
     setError(null);
     setIsBusy(true);
+    let courseIdForContext: string | null = null;
     try {
-      const id = await ensureCourseDraftExists();
-      const aboutFinal = await finalizeCourseAboutInlineImages(id);
-      const saved = await saveCore(id, { aboutHtmlOverride: aboutFinal });
-      await saveMembers(id);
-      await uploadIntroVideo(id);
-      await removeThumbnailOnServer(id);
-      await uploadThumbnail(id);
-      const syncedTopics = await syncCurriculumToServer(id);
+      const id = await runStep("Preparing course", () => ensureCourseDraftExists());
+      courseIdForContext = id;
+      const aboutFinal = await runStep("Saving About Course content", () => finalizeCourseAboutInlineImages(id));
+      const saved = await runStep("Saving course details", () => saveCore(id, { aboutHtmlOverride: aboutFinal }));
+      await runStep("Saving members", () => saveMembers(id));
+      await runStep("Uploading intro video", () => uploadIntroVideo(id));
+      await runStep("Updating thumbnail", async () => {
+        await removeThumbnailOnServer(id);
+        await uploadThumbnail(id);
+      });
+      const syncedTopics = await runStep("Saving chapters and lessons", () => syncCurriculumToServer(id));
       setTopics(syncedTopics);
       setPendingDeletedItemIds([]);
       setPendingDeletedTopicIds([]);
@@ -1919,11 +2102,151 @@ export function CourseEditorV2Form({
       revokeInlineQueueObjectUrls(pendingCourseAboutInlineImages ?? {});
       setPendingLessonUploadsByItemId({});
       setPendingCourseAboutInlineImages({});
-      await fetchJson(`/api/v2/courses/${id}/save-draft`, { method: "POST" });
+
+      await runStep("Finalizing save", () => fetchJson(`/api/v2/courses/${id}/save`, { method: "POST" }));
+
+      const finalSlug = saved.slug ?? slug;
+      setSlug(finalSlug);
+      setStatus("published");
+
+      // Mark as saved (used by leave-guard / unsaved banner).
+      savedSnapshotRef.current = {
+        courseId: id,
+        status: "published",
+        title,
+        slug: finalSlug,
+        isSlugManuallyEdited,
+        aboutHtml: aboutFinal,
+        excerpt,
+        difficulty,
+        whatWillLearn,
+        hours,
+        minutes,
+        materialsIncluded,
+        requirements,
+        videoProvider,
+        videoUrl,
+        thumbnailUrl,
+        selectedMemberIds: [...selectedMemberIds],
+        topics: deepClone(syncedTopics),
+      };
+      savedSignatureRef.current = JSON.stringify({
+        courseId: id,
+        status: "published",
+        title,
+        slug: finalSlug,
+        isSlugManuallyEdited,
+        aboutHtml: aboutFinal,
+        excerpt,
+        difficulty,
+        whatWillLearn,
+        hours,
+        minutes,
+        materialsIncluded,
+        requirements,
+        videoProvider,
+        videoUrl,
+        thumbnailUrl,
+        members: [...selectedMemberIds].sort(),
+        topicsSig: syncedTopics.map((t) => ({
+          id: t.id,
+          title: t.title,
+          summary: t.summary ?? null,
+          position: t.position,
+          items: (t.items ?? []).map((it) => ({
+            id: it.id,
+            item_type: it.item_type,
+            title: it.title ?? null,
+            position: it.position,
+            payload_json: it.payload_json ?? {},
+          })),
+        })),
+        pendingDeletedTopicIds: [],
+        pendingDeletedItemIds: [],
+        uploadSig: [],
+        hasIntroVideoFile: false,
+        hasThumbnailFile: false,
+      });
+
+      const silent = opts?.silent ?? false;
+      const navigateTo = silent ? null : (opts?.afterSuccessNavigateTo ?? null);
+      const showSuccessModal = silent ? false : (opts?.showSuccessModal ?? !navigateTo);
+      if (navigateTo) {
+        router.push(navigateTo);
+        return;
+      }
+
+      if (!silent) {
+        if (showSuccessModal) {
+          setSuccessModal({
+            title: "Changes saved",
+            description: "Your updates are now live for learners.",
+          });
+        }
+        if (mode === "create") {
+          router.replace(`/org/${orgSlug}/courses/${id}/edit-v2`);
+        } else {
+          router.refresh();
+        }
+      }
+    } catch (e) {
+      const info = normalizeStepError(e);
+      const reportable = isReportableSystemError({ api: info.api, cause: info.cause });
+      const supportId = reportable ? (info.api?.supportId ?? generateSupportId()) : null;
+      const step = info.step;
+      const userMessage = reportable
+        ? `${step ? `${step} failed.` : "Something went wrong."} Please report this error to Support.`
+        : `${step ? `${step}: ` : ""}${info.cause instanceof Error ? info.cause.message : "Failed to save changes."}`;
+
+      setErrorWithSupport({
+        message: userMessage,
+        step,
+        supportId,
+        canReport: reportable,
+        reportPayload: reportable
+          ? buildReportPayload({
+              supportId: supportId ?? generateSupportId(),
+              step,
+              context: { action: "save_published", course_id: courseIdForContext, mode, status },
+              cause: info.cause,
+              api: info.api,
+            })
+          : null,
+      });
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function saveDraft(opts?: { afterSuccessNavigateTo?: string; showSuccessModal?: boolean; silent?: boolean }) {
+    setError(null);
+    setIsBusy(true);
+    let courseIdForContext: string | null = null;
+    try {
+      const id = await runStep("Preparing course", () => ensureCourseDraftExists());
+      courseIdForContext = id;
+      const aboutFinal = await runStep("Saving About Course content", () => finalizeCourseAboutInlineImages(id));
+      const saved = await runStep("Saving course details", () => saveCore(id, { aboutHtmlOverride: aboutFinal }));
+      await runStep("Saving members", () => saveMembers(id));
+      await runStep("Uploading intro video", () => uploadIntroVideo(id));
+      await runStep("Updating thumbnail", async () => {
+        await removeThumbnailOnServer(id);
+        await uploadThumbnail(id);
+      });
+      const syncedTopics = await runStep("Saving chapters and lessons", () => syncCurriculumToServer(id));
+      setTopics(syncedTopics);
+      setPendingDeletedItemIds([]);
+      setPendingDeletedTopicIds([]);
+      for (const v of Object.values(pendingLessonUploadsByItemId ?? {})) {
+        revokeInlineQueueObjectUrls(v?.inlineImages ?? {});
+      }
+      revokeInlineQueueObjectUrls(pendingCourseAboutInlineImages ?? {});
+      setPendingLessonUploadsByItemId({});
+      setPendingCourseAboutInlineImages({});
+      await runStep("Finalizing save", () => fetchJson(`/api/v2/courses/${id}/save-draft`, { method: "POST" }));
       const finalSlug = saved.slug ?? slug;
       setSlug(finalSlug);
       setStatus("draft");
-      setNeedsRepublish(false);
 
       // Mark as saved (used by leave-guard / unsaved banner).
       savedSnapshotRef.current = {
@@ -1984,26 +2307,51 @@ export function CourseEditorV2Form({
         hasThumbnailFile: false,
       });
 
-      const navigateTo = opts?.afterSuccessNavigateTo ?? null;
-      const showSuccessModal = opts?.showSuccessModal ?? !navigateTo;
+      const silent = opts?.silent ?? false;
+      const navigateTo = silent ? null : (opts?.afterSuccessNavigateTo ?? null);
+      const showSuccessModal = silent ? false : (opts?.showSuccessModal ?? !navigateTo);
       if (navigateTo) {
         router.push(navigateTo);
         return;
       }
 
-      if (showSuccessModal) {
-        setSuccessModal({
-          title: "Draft saved",
-          description: "Your course draft has been saved successfully.",
-        });
-      }
-      if (mode === "create") {
-        router.replace(`/org/${orgSlug}/courses/${id}/edit-v2`);
-      } else {
-        router.refresh();
+      if (!silent) {
+        if (showSuccessModal) {
+          setSuccessModal({
+            title: "Draft saved",
+            description: "Your course draft has been saved successfully.",
+          });
+        }
+        if (mode === "create") {
+          router.replace(`/org/${orgSlug}/courses/${id}/edit-v2`);
+        } else {
+          router.refresh();
+        }
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save draft.");
+      const info = normalizeStepError(e);
+      const reportable = isReportableSystemError({ api: info.api, cause: info.cause });
+      const supportId = reportable ? (info.api?.supportId ?? generateSupportId()) : null;
+      const step = info.step;
+      const userMessage = reportable
+        ? `${step ? `${step} failed.` : "Something went wrong."} Please report this error to Support.`
+        : `${step ? `${step}: ` : ""}${info.cause instanceof Error ? info.cause.message : "Failed to save draft."}`;
+
+      setErrorWithSupport({
+        message: userMessage,
+        step,
+        supportId,
+        canReport: reportable,
+        reportPayload: reportable
+          ? buildReportPayload({
+              supportId: supportId ?? generateSupportId(),
+              step,
+              context: { action: "save_draft", course_id: courseIdForContext, mode, status },
+              cause: info.cause,
+              api: info.api,
+            })
+          : null,
+      });
     } finally {
       setIsBusy(false);
     }
@@ -2013,15 +2361,19 @@ export function CourseEditorV2Form({
     setError(null);
     setIsBusy(true);
     const wasPublished = status === "published";
+    let courseIdForContext: string | null = null;
     try {
-      const id = await ensureCourseDraftExists();
-      const aboutFinal = await finalizeCourseAboutInlineImages(id);
-      const saved = await saveCore(id, { aboutHtmlOverride: aboutFinal });
-      await saveMembers(id);
-      await uploadIntroVideo(id);
-      await removeThumbnailOnServer(id);
-      await uploadThumbnail(id);
-      const syncedTopics = await syncCurriculumToServer(id);
+      const id = await runStep("Preparing course", () => ensureCourseDraftExists());
+      courseIdForContext = id;
+      const aboutFinal = await runStep("Saving About Course content", () => finalizeCourseAboutInlineImages(id));
+      const saved = await runStep("Saving course details", () => saveCore(id, { aboutHtmlOverride: aboutFinal }));
+      await runStep("Saving members", () => saveMembers(id));
+      await runStep("Uploading intro video", () => uploadIntroVideo(id));
+      await runStep("Updating thumbnail", async () => {
+        await removeThumbnailOnServer(id);
+        await uploadThumbnail(id);
+      });
+      const syncedTopics = await runStep("Saving chapters and lessons", () => syncCurriculumToServer(id));
       setTopics(syncedTopics);
       setPendingDeletedItemIds([]);
       setPendingDeletedTopicIds([]);
@@ -2031,11 +2383,10 @@ export function CourseEditorV2Form({
       revokeInlineQueueObjectUrls(pendingCourseAboutInlineImages ?? {});
       setPendingLessonUploadsByItemId({});
       setPendingCourseAboutInlineImages({});
-      await fetchJson(`/api/v2/courses/${id}/publish`, { method: "POST" });
+      await runStep("Publishing course", () => fetchJson(`/api/v2/courses/${id}/publish`, { method: "POST" }));
       const finalSlug = saved.slug ?? slug;
       setSlug(finalSlug);
       setStatus("published");
-      setNeedsRepublish(false);
 
       savedSnapshotRef.current = {
         courseId: id,
@@ -2114,7 +2465,29 @@ export function CourseEditorV2Form({
         router.refresh();
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to publish course.");
+      const info = normalizeStepError(e);
+      const reportable = isReportableSystemError({ api: info.api, cause: info.cause });
+      const supportId = reportable ? (info.api?.supportId ?? generateSupportId()) : null;
+      const step = info.step;
+      const userMessage = reportable
+        ? `${step ? `${step} failed.` : "Something went wrong."} Please report this error to Support.`
+        : `${step ? `${step}: ` : ""}${info.cause instanceof Error ? info.cause.message : "Failed to publish course."}`;
+
+      setErrorWithSupport({
+        message: userMessage,
+        step,
+        supportId,
+        canReport: reportable,
+        reportPayload: reportable
+          ? buildReportPayload({
+              supportId: supportId ?? generateSupportId(),
+              step,
+              context: { action: "publish_course", course_id: courseIdForContext, mode, status, was_published: wasPublished },
+              cause: info.cause,
+              api: info.api,
+            })
+          : null,
+      });
     } finally {
       setIsBusy(false);
     }
@@ -2137,7 +2510,7 @@ export function CourseEditorV2Form({
           },
         ]);
         setTopicExpanded(newTopicId, true);
-        toast.info("Chapter added locally. Click Save Draft or Publish/Republish to apply changes.");
+        toast.info("Chapter added locally. Click Save to apply changes.");
       } else if (topicModal.topicId) {
         setTopics((prev) =>
           prev.map((t) =>
@@ -2146,7 +2519,7 @@ export function CourseEditorV2Form({
               : t
           )
         );
-        toast.info("Chapter updated locally. Click Save Draft or Publish/Republish to apply changes.");
+        toast.info("Chapter updated locally. Click Save to apply changes.");
       }
       setTopicModal(null);
     } catch (e) {
@@ -2164,8 +2537,7 @@ export function CourseEditorV2Form({
       if (!isTempId(topicId)) {
         setPendingDeletedTopicIds((prev) => (prev.includes(topicId) ? prev : [...prev, topicId]));
       }
-      if (status === "published") setNeedsRepublish(true);
-      toast.info("Chapter removed locally. Click Save Draft or Publish/Republish to apply changes.");
+      toast.info("Chapter removed locally. Click Save to apply changes.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete chapter.");
     } finally {
@@ -2182,8 +2554,7 @@ export function CourseEditorV2Form({
       if (!isTempId(itemId)) {
         setPendingDeletedItemIds((prev) => (prev.includes(itemId) ? prev : [...prev, itemId]));
       }
-      if (status === "published") setNeedsRepublish(true);
-      toast.info("Item removed locally. Click Save Draft or Publish/Republish to apply changes.");
+      toast.info("Item removed locally. Click Save to apply changes.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete item.");
     } finally {
@@ -2258,8 +2629,7 @@ export function CourseEditorV2Form({
       }));
 
       setItemModal(null);
-      toast.info("Lesson updated locally. Click Save Draft or Publish/Republish to apply changes.");
-      if (status === "published") setNeedsRepublish(true);
+      toast.info("Lesson updated locally. Click Save to apply changes.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save lesson.");
     }
@@ -2292,7 +2662,6 @@ export function CourseEditorV2Form({
         return { ...t, items: t.items.map((it) => (it.id === localItemId ? { ...nextItem, position: it.position } : it)) };
       })
     );
-    if (status === "published") setNeedsRepublish(true);
     return localItemId;
   }
 
@@ -2377,8 +2746,6 @@ export function CourseEditorV2Form({
         return { ...prev, [id]: { ...existing, featureImageFile: null } };
       });
     }
-
-    if (status === "published") setNeedsRepublish(true);
   }
 
   function applyLessonVideoFile(file: File | null) {
@@ -2387,9 +2754,9 @@ export function CourseEditorV2Form({
       toast.error("Invalid video type. Allowed: MP4.");
       return;
     }
-    const maxBytes = 50 * 1024 * 1024;
+    const maxBytes = 300 * 1024 * 1024;
     if (file.size > maxBytes) {
-      toast.error("Video is too large. Max size is 50MB.");
+      toast.error("Video is too large. Max size is 300MB.");
       return;
     }
     setItemModal((prev) => (prev && prev.itemType === "lesson" ? { ...prev, videoFile: file } : prev));
@@ -2397,14 +2764,14 @@ export function CourseEditorV2Form({
 
   function applyLessonAttachmentFiles(files: File[]) {
     const maxFiles = 10;
-    const maxBytesPerFile = 50 * 1024 * 1024;
+    const maxBytesPerFile = 300 * 1024 * 1024;
     if (files.length > maxFiles) {
       toast.error("Too many attachments. Max 10 files.");
       return;
     }
     for (const f of files) {
       if (f.size > maxBytesPerFile) {
-        toast.error(`Attachment too large: ${f.name} (max 50MB).`);
+        toast.error(`Attachment too large: ${f.name} (max 300MB).`);
         return;
       }
     }
@@ -2423,19 +2790,18 @@ export function CourseEditorV2Form({
     next.splice(newIndex, 0, moved);
     const withPosition = next.map((t, idx) => ({ ...t, position: idx }));
     setTopics(withPosition);
-    if (status === "published") setNeedsRepublish(true);
   }
 
   return (
     <div
       className="cb-form mx-auto w-full space-y-5"
-      style={{ minHeight: "100vh", background: "linear-gradient(160deg, #f0fdf7 0%, #ffffff 45%, #f4f9ff 100%)" }}
+      style={{ minHeight: "100vh" }}
     >
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border bg-white px-4 py-3"
         style={{ boxShadow: "0 2px 16px rgba(27,135,85,0.1)", borderColor: "rgba(27,135,85,0.15)" }}
       >
-        <div className="text-sm text-muted-foreground">
-          Course Builder <span className="font-medium text-foreground">V2</span> ({status})
+        <div className="text-xl text-foreground font-semibold">
+          Course Builder
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -2449,7 +2815,7 @@ export function CourseEditorV2Form({
                 return;
               }
               if (hasUnsavedChanges) {
-                toast.info("You have unsaved changes. Save Draft or Publish/Republish to preview the latest version.");
+                toast.info("You have unsaved changes. Save to preview the latest version.");
                 return;
               }
               window.open(previewHref, "_blank", "noopener,noreferrer");
@@ -2462,18 +2828,14 @@ export function CourseEditorV2Form({
             type="button"
             variant="outline"
             onClick={() => {
-              if (status === "published") {
-                setConfirmUnpublishDraftOpen(true);
-                return;
-              }
-              void saveDraft();
+              void (status === "published" ? savePublished() : saveDraft());
             }}
             disabled={isBusy}
           >
             {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            Save Draft
+            Save
           </Button>
-          {status === "published" && !needsRepublish ? (
+          {status === "published" ? (
             <Button
               type="button"
               disabled
@@ -2485,9 +2847,14 @@ export function CourseEditorV2Form({
           ) : (
             <Button type="button" onClick={() => void publishCourse()} disabled={isBusy || !canPublish}>
               {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-              {status === "published" ? "Republish" : "Publish"}
+              Publish
             </Button>
           )}
+          {status === "published" ? (
+            <Button type="button" variant="outline" disabled={isBusy} onClick={() => setConfirmUnpublishDraftOpen(true)}>
+              Unpublish
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             type="button"
@@ -2507,19 +2874,47 @@ export function CourseEditorV2Form({
         </div>
       </div>
 
-      {error ? <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">{error}</div> : null}
+      {error ? (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div>{error}</div>
+              {errorStep ? <div className="mt-1 text-xs text-muted-foreground">Step: {errorStep}</div> : null}
+              {errorSupportId ? (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Support ID: <span className="font-mono">{errorSupportId}</span>
+                </div>
+              ) : null}
+            </div>
+
+            {errorCanReport ? (
+              <div className="shrink-0 flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void reportCurrentError()}
+                  disabled={errorReportSending || errorReportSent}
+                >
+                  {errorReportSent ? "Reported" : (errorReportSending ? "Reporting..." : "Report error")}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {hasUnsavedChanges ? (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900">
-          You have unsaved changes. Click <span className="font-medium">Save Draft</span> or <span className="font-medium">Publish/Republish</span> to apply them.
+          You have unsaved changes. Click <span className="font-medium">Save</span> to apply them.
         </div>
       ) : null}
 
       <div
         style={{
-          background: "linear-gradient(135deg, #c8edd8 0%, #b3e5c4 50%, #a5deb8 100%)",
+          // background: "linear-gradient(135deg, #c8edd8 0%, #b3e5c4 50%, #a5deb8 100%)",
           borderRadius: "18px",
           padding: "10px",
-          boxShadow: "0 6px 24px rgba(27,135,85,0.18), 0 2px 8px rgba(0,0,0,0.06)",
+          boxShadow: "0 6px 24px rgba(245,129,49,0.18), 0 2px 8px rgba(0,0,0,0.06)",
         }}
       >
         <div className="grid grid-cols-2 gap-3">
@@ -2528,10 +2923,10 @@ export function CourseEditorV2Form({
             type="button"
             onClick={() => setActiveMainTab("information")}
             style={activeMainTab === "information" ? {
-              background: "linear-gradient(135deg, #53a47f 0%, #3d9e6d 50%, #1b8755 100%)",
+              background: "linear-gradient(-135deg, #FFB972 0%, #F58131 50%, #D85B12 100%)",
               backgroundSize: "200% 200%",
               animation: "cb-gradient-shift 8s ease infinite",
-              boxShadow: "0 8px 24px rgba(27,135,85,0.4), 0 2px 8px rgba(0,0,0,0.12)",
+              boxShadow: "0 8px 24px rgba(245,129,49,0.42), 0 2px 8px rgba(0,0,0,0.12)",
               border: "1px solid rgba(255,255,255,0.35)",
               color: "#ffffff",
               borderRadius: "12px",
@@ -2562,11 +2957,11 @@ export function CourseEditorV2Form({
             type="button"
             onClick={() => setActiveMainTab("builder")}
             style={activeMainTab === "builder" ? {
-              background: "linear-gradient(135deg, #0e4d2c 0%, #1b6b3a 50%, #2d8f52 100%)",
+              background: "linear-gradient(135deg, #FFB972 0%, #F58131 50%, #D85B12 100%)",
               backgroundSize: "200% 200%",
               animation: "cb-gradient-shift 8s ease infinite",
-              boxShadow: "0 8px 24px rgba(14,77,44,0.45), 0 2px 8px rgba(0,0,0,0.12)",
-              border: "1px solid rgba(255,255,255,0.25)",
+              boxShadow: "0 8px 24px rgba(245,129,49,0.42), 0 2px 8px rgba(0,0,0,0.12)",
+              border: "1px solid rgba(255,255,255,0.35)",
               color: "#ffffff",
               borderRadius: "12px",
               padding: "14px 18px",
@@ -2602,7 +2997,6 @@ export function CourseEditorV2Form({
             onChange={(e) => {
               const nextTitle = e.target.value;
               setTitle(nextTitle);
-                if (status === "published") setNeedsRepublish(true);
               if (!isSlugManuallyEdited) {
                 setSlug(normalizeSlug(nextTitle));
               }
@@ -2621,12 +3015,10 @@ export function CourseEditorV2Form({
               if (!raw.trim()) {
                 setSlug("");
                 setIsSlugManuallyEdited(false);
-                  if (status === "published") setNeedsRepublish(true);
                 return;
               }
               setSlug(normalizeSlug(raw));
               setIsSlugManuallyEdited(true);
-                if (status === "published") setNeedsRepublish(true);
             }}
             placeholder="course-url-slug"
             />
@@ -2645,7 +3037,6 @@ export function CourseEditorV2Form({
               onChange={(html) => {
                 setAboutHtml(html);
                 setPendingCourseAboutInlineImages((prev) => pruneQueueByHtml(prev ?? {}, html));
-                if (status === "published") setNeedsRepublish(true);
               }}
               placeholder="Write a detailed course description for visitors before enrollment."
               queue={pendingCourseAboutInlineImages}
@@ -2654,7 +3045,6 @@ export function CourseEditorV2Form({
                   const next = typeof updater === "function" ? updater(prev ?? {}) : updater;
                   return next ?? {};
                 });
-                if (status === "published") setNeedsRepublish(true);
               }}
             />
             <FieldHint>This detailed description is visible to users before they enroll in the course.</FieldHint>
@@ -2666,7 +3056,6 @@ export function CourseEditorV2Form({
               value={excerpt}
               onChange={(e) => {
                 setExcerpt(e.target.value.slice(0, 200));
-                if (status === "published") setNeedsRepublish(true);
               }}
               placeholder="Write a short summary shown in course lists."
               className="min-h-[90px]"
@@ -2689,7 +3078,6 @@ export function CourseEditorV2Form({
               onChange={(e) => {
                 setVideoProvider(e.target.value as "html5" | "youtube" | "vimeo");
                 setVideoFile(null);
-                if (status === "published") setNeedsRepublish(true);
               }}
             >
               <option value="html5">HTML 5 (mp4)</option>
@@ -2728,7 +3116,7 @@ export function CourseEditorV2Form({
                 )}
               >
                 <p className="text-sm font-medium">Drag & Drop Your Video</p>
-                <p className="mt-1 text-xs text-muted-foreground">File format: .mp4 • Max size: 50MB</p>
+                <p className="mt-1 text-xs text-muted-foreground">File format: .mp4 • Max size: 300MB</p>
                 <div className="mt-4">
                   <Button type="button" variant="outline" size="sm" onClick={() => videoInputRef.current?.click()}>
                     Browse file
@@ -2752,7 +3140,6 @@ export function CourseEditorV2Form({
                   value={videoUrl}
                   onChange={(e) => {
                     setVideoUrl(e.target.value);
-                    if (status === "published") setNeedsRepublish(true);
                   }}
                   placeholder={`Paste ${videoProvider === "youtube" ? "YouTube" : "Vimeo"} video URL`}
                 />
@@ -2798,6 +3185,9 @@ export function CourseEditorV2Form({
                 <img src={thumbnailObjectUrl ?? thumbnailUrl} alt="Course thumbnail preview" className="h-full w-full object-cover" />
               ) : (
                 <div className="px-3 text-center">
+                  <div className="mx-auto mb-2 inline-flex h-10 w-10 items-center justify-center rounded-full bg-background/80 text-muted-foreground ring-1 ring-border">
+                    <ImageIcon className="h-5 w-5" />
+                  </div>
                   <p className="text-xs text-muted-foreground">Drop or choose image</p>
                   <p className="mt-1 text-[11px] text-muted-foreground">Click here or drag file into this area</p>
                 </div>
@@ -2839,10 +3229,6 @@ export function CourseEditorV2Form({
               </div>
               <div className="text-xs">Maximum upload size: 10MB</div>
             </div>
-            <Button type="button" variant="default" size="sm" onClick={() => thumbnailInputRef.current?.click()} className="w-fit">
-              <Upload className="h-4 w-4" />
-              Upload Image
-            </Button>
           </div>
         </div>
       </DetailsSection> : null}
@@ -2894,7 +3280,6 @@ export function CourseEditorV2Form({
                       checked={allFilteredSelected}
                       onChange={(e) => {
                         const checked = e.target.checked;
-                        if (status === "published") setNeedsRepublish(true);
                         setSelectedMemberIds((prev) => {
                           const next = new Set(prev);
                           for (const m of filteredMembers) {
@@ -2926,7 +3311,6 @@ export function CourseEditorV2Form({
                             checked={selectedMemberIds.has(m.id)}
                             onChange={(e) => {
                               const checked = e.target.checked;
-                              if (status === "published") setNeedsRepublish(true);
                               setSelectedMemberIds((prev) => {
                                 const next = new Set(prev);
                                 if (checked) next.add(m.id);
@@ -2976,7 +3360,6 @@ export function CourseEditorV2Form({
                                 onChange={(e) => {
                                   const v = e.target.value as AccessDurationKey;
                                   setMemberAccessById((prev) => ({ ...prev, [m.id]: v }));
-                                  if (status === "published") setNeedsRepublish(true);
                                 }}
                               >
                                 {ACCESS_DURATION_KEYS.map((k) => (
@@ -3002,7 +3385,6 @@ export function CourseEditorV2Form({
                 value={difficulty ?? "all_levels"}
                 onChange={(e) => {
                   setDifficulty(e.target.value as CourseV2["difficulty_level"]);
-                  if (status === "published") setNeedsRepublish(true);
                 }}
               >
                 <option value="all_levels">All Levels</option>
@@ -3181,7 +3563,6 @@ export function CourseEditorV2Form({
               value={whatWillLearn}
               onChange={(e) => {
                 setWhatWillLearn(e.target.value);
-                if (status === "published") setNeedsRepublish(true);
               }}
               placeholder="Describe what learners will gain from this course."
             />
@@ -3199,7 +3580,6 @@ export function CourseEditorV2Form({
                   value={hours}
                   onChange={(e) => {
                     setHours(Math.max(0, Number(e.target.value || 0)));
-                    if (status === "published") setNeedsRepublish(true);
                   }}
                   placeholder="Hours"
                 />
@@ -3213,7 +3593,6 @@ export function CourseEditorV2Form({
                   value={minutes}
                   onChange={(e) => {
                     setMinutes(Math.min(59, Math.max(0, Number(e.target.value || 0))));
-                    if (status === "published") setNeedsRepublish(true);
                   }}
                   placeholder="Minutes"
                 />
@@ -3228,7 +3607,6 @@ export function CourseEditorV2Form({
               value={materialsIncluded}
               onChange={(e) => {
                 setMaterialsIncluded(e.target.value);
-                if (status === "published") setNeedsRepublish(true);
               }}
               placeholder="Describe included materials, resources or downloads."
             />
@@ -3241,7 +3619,6 @@ export function CourseEditorV2Form({
               value={requirements}
               onChange={(e) => {
                 setRequirements(e.target.value);
-                if (status === "published") setNeedsRepublish(true);
               }}
               placeholder="Add prerequisites or important instructions before learners start."
             />
@@ -3625,7 +4002,7 @@ export function CourseEditorV2Form({
                 return { ...prev, [localItemId]: { ...existing, inlineImages: nextInline } };
               });
             }
-            toast.info("Quiz updated locally. Click Save Draft or Publish/Republish to apply changes.");
+            toast.info("Quiz updated locally. Click Save to apply changes.");
           }}
         />
       ) : itemModal ? (
@@ -3744,6 +4121,9 @@ export function CourseEditorV2Form({
                             <img src={src} alt="Lesson feature image preview" className="h-full w-full object-cover" />
                           ) : (
                             <div className="px-3 text-center">
+                              <div className="mx-auto mb-2 inline-flex h-10 w-10 items-center justify-center rounded-full bg-background/80 text-muted-foreground ring-1 ring-border">
+                                <ImageIcon className="h-5 w-5" />
+                              </div>
                               <p className="text-xs text-muted-foreground">Drop or choose image</p>
                               <p className="mt-1 text-[11px] text-muted-foreground">Click here or drag file into this area</p>
                             </div>
@@ -3790,16 +4170,6 @@ export function CourseEditorV2Form({
                           </div>
                           <div className="text-xs">Maximum upload size: 10MB</div>
                         </div>
-                        <Button
-                          type="button"
-                          variant="default"
-                          size="sm"
-                          onClick={() => (document.getElementById("lesson-feature-image-input") as HTMLInputElement | null)?.click()}
-                          className="w-fit"
-                        >
-                          <Upload className="h-4 w-4" />
-                          Upload Image
-                        </Button>
                       </div>
                     </div>
                     <FieldHint>This image can be shown on the lesson header inside the learning experience.</FieldHint>
@@ -3827,7 +4197,7 @@ export function CourseEditorV2Form({
                       {itemModal.videoProvider === "html5" ? (
                         <div className="rounded-md border border-dashed border-primary bg-muted/10 p-10 text-center">
                           <p className="text-sm font-medium">Drag & Drop Your Video</p>
-                          <p className="mt-1 text-xs text-muted-foreground">File format: .mp4 • Max size: 50MB</p>
+                          <p className="mt-1 text-xs text-muted-foreground">File format: .mp4 • Max size: 300MB</p>
                           <div className="mt-4">
                             <Button
                               type="button"
@@ -3986,13 +4356,13 @@ export function CourseEditorV2Form({
                       const href = leavePrompt.href;
                       setLeavePrompt(null);
                       if (status === "published") {
-                        void publishCourse({ afterSuccessNavigateTo: href });
+                        void savePublished({ afterSuccessNavigateTo: href });
                       } else {
                         void saveDraft({ afterSuccessNavigateTo: href });
                       }
                     }}
                   >
-                    {status === "published" ? "Republish & leave" : "Save draft & leave"}
+                    {status === "published" ? "Save & leave" : "Save draft & leave"}
                   </Button>
                 </div>
               </div>
@@ -4042,25 +4412,36 @@ export function CourseEditorV2Form({
       ) : null}
 
       {successModal ? (
-        <div className="fixed inset-0 z-1000 bg-black/50 p-4 sm:p-6 overflow-y-auto">
+        <div className="fixed inset-0 z-1000 bg-black/40 backdrop-blur-sm p-4 sm:p-6 overflow-y-auto">
           <div className="min-h-[calc(100svh-2rem)] sm:min-h-[calc(100svh-3rem)] flex items-center justify-center">
-            <div className="w-full max-w-md rounded-lg border bg-card shadow-xl p-6 text-center">
-            <div className="mx-auto h-12 w-12 rounded-full bg-green-100 text-green-700 flex items-center justify-center mb-3">
-              <Check className="h-6 w-6" />
-            </div>
-            <h3 className="text-lg font-semibold">{successModal.title}</h3>
-            <p className="text-sm text-muted-foreground mt-1">{successModal.description}</p>
-            <div className="mt-4">
-              <Button
+            <div className="relative w-full max-w-sm rounded-2xl border bg-card shadow-2xl px-6 py-7 text-center">
+              <button
                 type="button"
-                onClick={() => {
-                  setSuccessModal(null);
-                  toast.success(successModal.title);
-                }}
+                aria-label="Close"
+                className="absolute right-3 top-3 rounded-full p-2 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                onClick={() => setSuccessModal(null)}
               >
-                OK
-              </Button>
-            </div>
+                <X className="h-4 w-4" />
+              </button>
+
+              <div className="mx-auto h-16 w-16 rounded-full bg-linear-to-br from-emerald-500 to-emerald-600 text-white flex items-center justify-center ring-8 ring-emerald-500/15">
+                <Check className="h-8 w-8" />
+              </div>
+
+              <h3 className="mt-5 text-2xl font-semibold tracking-tight">Success!</h3>
+              <p className="mt-2 text-base font-medium text-foreground">{successModal.title}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{successModal.description}</p>
+
+              <div className="mt-6">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 w-full rounded-full border-emerald-600 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+                  onClick={() => setSuccessModal(null)}
+                >
+                  Continue
+                </Button>
+              </div>
             </div>
           </div>
         </div>

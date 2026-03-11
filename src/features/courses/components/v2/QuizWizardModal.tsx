@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -724,6 +724,10 @@ export function QuizWizardModal({
   const [questionTypeOpen, setQuestionTypeOpen] = useState(false);
   const [isOptionImageDragActive, setIsOptionImageDragActive] = useState(false);
 
+  const [editingQuestionBaseline, setEditingQuestionBaseline] = useState<string>("");
+  const pendingExitActionRef = useRef<"close" | "back" | null>(null);
+  const [confirmExitOpen, setConfirmExitOpen] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [queuedInlineImages, setQueuedInlineImages] = useState<InlineImageQueue>({});
 
@@ -770,6 +774,25 @@ export function QuizWizardModal({
     revokeInlineQueueObjectUrls(queuedInlineImages ?? {});
     setQueuedInlineImages({});
     onClose();
+  }
+
+  const isEditingQuestionDirty = useMemo(() => {
+    if (!editingQuestion) return false;
+    try {
+      return JSON.stringify(editingQuestion) !== editingQuestionBaseline;
+    } catch {
+      return true;
+    }
+  }, [editingQuestion, editingQuestionBaseline]);
+
+  function requestExit(action: "close" | "back") {
+    if (isEditingQuestionDirty) {
+      pendingExitActionRef.current = action;
+      setConfirmExitOpen(true);
+      return;
+    }
+    if (action === "close") closeAndCleanup();
+    else goBack();
   }
 
   function goBack() {
@@ -822,8 +845,98 @@ export function QuizWizardModal({
       answer_explanation_incorrect_html: "",
       answer_explanation_html: "",
     };
+    try {
+      setEditingQuestionBaseline(JSON.stringify(q));
+    } catch {
+      setEditingQuestionBaseline("");
+    }
     setEditingQuestion(q);
   }
+
+  function openEditQuestion(q: QuizQuestion) {
+    setOptionEditorId(null);
+    try {
+      setEditingQuestionBaseline(JSON.stringify(q));
+    } catch {
+      setEditingQuestionBaseline("");
+    }
+    setEditingQuestion(q);
+  }
+
+  function commitEditingQuestion(): boolean {
+    if (!editingQuestion) return false;
+
+    if (editingQuestion.title.trim().length < 2) {
+      toast.error("Question title must be at least 2 characters.");
+      return false;
+    }
+
+    if (!isSupportedAnswerType(editingQuestion.type)) {
+      toast.error("This question type is not supported yet. Please use True/False, Single choice, or Multiple Choice.");
+      return false;
+    }
+
+    if (editingQuestion.type === "true_false") {
+      const normalized: QuizQuestion = {
+        ...editingQuestion,
+        options: [],
+        correct_option_id: null,
+        correct_option_ids: [],
+        correct_boolean: typeof editingQuestion.correct_boolean === "boolean" ? editingQuestion.correct_boolean : true,
+      };
+      upsertQuestion(normalized);
+      setEditingQuestion(null);
+      setOptionEditorId(null);
+      toast.success("Question saved.");
+      return true;
+    }
+
+    if (editingQuestion.options.length < 2) {
+      toast.error("Add at least 2 options.");
+      return false;
+    }
+    if (editingQuestion.type === "single_choice") {
+      if (!editingQuestion.correct_option_id) {
+        toast.error("Select the correct answer.");
+        return false;
+      }
+    } else if (editingQuestion.type === "multiple_choice") {
+      if (!(editingQuestion.correct_option_ids ?? []).length) {
+        toast.error("Select one or more correct answers.");
+        return false;
+      }
+    }
+
+    const normalized: QuizQuestion = {
+      ...editingQuestion,
+      options: editingQuestion.options
+        .slice()
+        .sort((a, b) => a.position - b.position)
+        .map((o, idx) => ({ ...o, position: idx })),
+      correct_option_ids:
+        editingQuestion.type === "multiple_choice"
+          ? (editingQuestion.correct_option_ids ?? []).filter(Boolean)
+          : editingQuestion.correct_option_id
+            ? [editingQuestion.correct_option_id]
+            : [],
+      correct_boolean: undefined,
+    };
+    upsertQuestion(normalized);
+    setEditingQuestion(null);
+    setOptionEditorId(null);
+    toast.success("Question saved.");
+    return true;
+  }
+
+  useEffect(() => {
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (!isEditingQuestionDirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isEditingQuestionDirty]);
 
   async function uploadOptionImage(file: File) {
     if (!editingQuestion || !optionEditorId) return;
@@ -909,7 +1022,7 @@ export function QuizWizardModal({
                         </div>
                       </div>
                       <div className="flex items-center gap-1">
-                        <Button type="button" variant="ghost" size="icon-sm" onClick={() => setEditingQuestion(q)} title="Edit question">
+                        <Button type="button" variant="ghost" size="icon-sm" onClick={() => openEditQuestion(q)} title="Edit question">
                           <Pencil className="h-4 w-4" />
                         </Button>
                         <Button type="button" variant="ghost" size="icon-sm" onClick={() => removeQuestion(q.id)} title="Delete question">
@@ -963,7 +1076,7 @@ export function QuizWizardModal({
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground cursor-pointer"
-                  onClick={goBack}
+                  onClick={() => requestExit("back")}
                 >
                   <ChevronLeft className="h-4 w-4" />
                   Back
@@ -1242,7 +1355,7 @@ export function QuizWizardModal({
 
                                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                         <div>
-                                          <QFieldLabel accent="#7c3abd">Upload Image</QFieldLabel>
+                                          <QFieldLabel accent="#7c3abd">Option Image</QFieldLabel>
                                           <div
                                             role="button"
                                             tabIndex={0}
@@ -1279,6 +1392,9 @@ export function QuizWizardModal({
                                               />
                                             ) : (
                                               <div className="px-3 text-center">
+                                                <div className="mx-auto mb-2 inline-flex h-10 w-10 items-center justify-center rounded-full bg-background/80 text-muted-foreground ring-1 ring-border">
+                                                  <ImageIcon className="h-5 w-5" />
+                                                </div>
                                                 <p className="text-xs text-muted-foreground">Drop or choose image</p>
                                                 <p className="mt-1 text-[11px] text-muted-foreground">Click here or drag file into this area</p>
                                               </div>
@@ -1505,76 +1621,7 @@ export function QuizWizardModal({
                 </div>
               </div>
 
-              <div className="flex items-center justify-end pt-2">
-                <Button
-                  type="button"
-                  className="gap-2"
-                  onClick={() => {
-                    if (!editingQuestion.title.trim()) {
-                      toast.error("Question title is required.");
-                      return;
-                    }
-
-                    if (!isSupportedAnswerType(editingQuestion.type)) {
-                      toast.error("This question type is not supported yet. Please use True/False, Single choice, or Multiple Choice.");
-                      return;
-                    }
-
-                    if (editingQuestion.type === "true_false") {
-                      const normalized: QuizQuestion = {
-                        ...editingQuestion,
-                        options: [],
-                        correct_option_id: null,
-                        correct_option_ids: [],
-                        correct_boolean: typeof editingQuestion.correct_boolean === "boolean" ? editingQuestion.correct_boolean : true,
-                      };
-                      upsertQuestion(normalized);
-                      setEditingQuestion(null);
-                      setOptionEditorId(null);
-                      toast.success("Question added.");
-                      return;
-                    }
-
-                    if (editingQuestion.options.length < 2) {
-                      toast.error("Add at least 2 options.");
-                      return;
-                    }
-                    if (editingQuestion.type === "single_choice") {
-                      if (!editingQuestion.correct_option_id) {
-                        toast.error("Select the correct answer.");
-                        return;
-                      }
-                    } else if (editingQuestion.type === "multiple_choice") {
-                      if (!(editingQuestion.correct_option_ids ?? []).length) {
-                        toast.error("Select one or more correct answers.");
-                        return;
-                      }
-                    }
-
-                    const normalized: QuizQuestion = {
-                      ...editingQuestion,
-                      options: editingQuestion.options
-                        .slice()
-                        .sort((a, b) => a.position - b.position)
-                        .map((o, idx) => ({ ...o, position: idx })),
-                      correct_option_ids:
-                        editingQuestion.type === "multiple_choice"
-                          ? (editingQuestion.correct_option_ids ?? []).filter(Boolean)
-                          : editingQuestion.correct_option_id
-                            ? [editingQuestion.correct_option_id]
-                            : [],
-                      correct_boolean: undefined,
-                    };
-                    upsertQuestion(normalized);
-                    setEditingQuestion(null);
-                    setOptionEditorId(null);
-                    toast.success("Question added.");
-                  }}
-                >
-                  <Plus className="h-4 w-4" />
-                  Add to Questions
-                </Button>
-              </div>
+              {/* Primary save action moved to the sticky footer so users don't have to scroll */}
             </div>
           )}
         </div>
@@ -1848,7 +1895,7 @@ export function QuizWizardModal({
             </div>
             <button
               type="button"
-              onClick={closeAndCleanup}
+              onClick={() => requestExit("close")}
               style={{
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
                 width: 32, height: 32, borderRadius: "8px",
@@ -1866,6 +1913,43 @@ export function QuizWizardModal({
 
           {content}
 
+          {confirmExitOpen ? (
+            <div className="fixed inset-0 z-1100 bg-black/50 p-4 sm:p-6 overflow-y-auto" data-leave-guard-ignore="true">
+              <div className="min-h-[calc(100svh-2rem)] sm:min-h-[calc(100svh-3rem)] flex items-center justify-center">
+                <div className="w-full max-w-lg rounded-lg border bg-card shadow-xl">
+                  <div className="border-b px-4 py-3">
+                    <h3 className="font-semibold">Discard changes?</h3>
+                  </div>
+                  <div className="p-4 space-y-2 text-sm text-muted-foreground">
+                    <p>
+                      You have unsaved changes in this question.
+                    </p>
+                    <p>
+                      If you leave now, those changes will be lost.
+                    </p>
+                  </div>
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2 border-t px-4 py-3">
+                    <Button type="button" variant="outline" onClick={() => setConfirmExitOpen(false)}>
+                      Continue editing
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        const action = pendingExitActionRef.current;
+                        pendingExitActionRef.current = null;
+                        setConfirmExitOpen(false);
+                        if (action === "close") closeAndCleanup();
+                        else if (action === "back") goBack();
+                      }}
+                    >
+                      Discard
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           <div
             style={{
               display: "flex",
@@ -1876,18 +1960,23 @@ export function QuizWizardModal({
               background: "linear-gradient(135deg, #f0faf6 0%, #e8f5ed 100%)",
             }}
           >
-            <Button type="button" variant="outline" onClick={closeAndCleanup}>
+            <Button type="button" variant="outline" onClick={() => requestExit("close")}>
               Cancel
             </Button>
 
             <div className="flex items-center gap-2">
               {step > 1 ? (
-                <Button type="button" variant="outline" onClick={goBack}>
+                <Button type="button" variant="outline" onClick={() => requestExit("back")}>
                   Back
                 </Button>
               ) : null}
 
-              {step < 3 ? (
+              {editingQuestion ? (
+                <Button type="button" className="gap-2" onClick={commitEditingQuestion}>
+                  <Plus className="h-4 w-4" />
+                  Add to Questions
+                </Button>
+              ) : step < 3 ? (
                 <Button type="button" onClick={goNext}>
                   Save & Next
                 </Button>

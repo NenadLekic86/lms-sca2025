@@ -3,6 +3,7 @@ import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server"
 import { apiError, apiOk } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
 import { hasMeaningfulHtmlContent } from "@/lib/courses/sanitize.server";
+import { generateSupportId } from "@/lib/support/supportId";
 
 export const runtime = "nodejs";
 
@@ -37,7 +38,18 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     .eq("course_id", id);
 
   if (topicCountError) {
-    return apiError("INTERNAL", "Cannot validate topics.", { status: 500 });
+    const supportId = generateSupportId();
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Cannot validate topics.",
+      internalMessage: topicCountError.message,
+      details: { course_id: id, support_id: supportId },
+    });
+    return apiError("INTERNAL", "Cannot validate topics.", { status: 500, supportId });
   }
   if ((topicCount ?? 0) < 1) {
     return apiError("VALIDATION_ERROR", "Cannot publish: add at least one topic in Course Builder.", { status: 400 });
@@ -54,6 +66,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     .eq("id", id);
 
   if (updateError) {
+    const supportId = generateSupportId();
     await logApiEvent({
       request,
       caller,
@@ -62,8 +75,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       code: "INTERNAL",
       publicMessage: "Failed to publish course.",
       internalMessage: updateError.message,
+      details: { support_id: supportId },
     });
-    return apiError("INTERNAL", "Failed to publish course.", { status: 500 });
+    return apiError("INTERNAL", "Failed to publish course.", { status: 500, supportId });
   }
 
   await logApiEvent({

@@ -11,7 +11,7 @@ export function ReportFiltersClient(props: {
   orgIdFixed?: string; // for org reports
   initial: {
     q: string;
-    result: "all" | "passed" | "failed" | "not_submitted";
+    result: "all" | "certified" | "not_certified";
     from: string;
     to: string;
     orgId: string;
@@ -76,16 +76,15 @@ export function ReportFiltersClient(props: {
           </div>
 
           <div>
-              <div className="text-xs text-muted-foreground mb-1">Result</div>
+              <div className="text-xs text-muted-foreground mb-1">Certificate</div>
               <select
                 name="result"
                 defaultValue={initial.result}
                 className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
               >
                 <option value="all">All</option>
-                <option value="passed">Passed</option>
-                <option value="failed">Failed</option>
-                <option value="not_submitted">Not Submitted</option>
+                <option value="certified">Certified</option>
+                <option value="not_certified">Not certified</option>
               </select>
             </div>
           </div>

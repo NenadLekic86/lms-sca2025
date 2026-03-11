@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { apiError, apiOk } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
+import { generateSupportId } from "@/lib/support/supportId";
 import { patchCourseV2Schema, validateSchema } from "@/lib/validations/schemas";
 import { coerceNullableText, coursePermalink, ensureUniqueCourseSlug } from "@/lib/courses/v2";
 import { sanitizeRichHtml } from "@/lib/courses/sanitize.server";
@@ -34,6 +35,35 @@ type CourseRow = {
 };
 
 export const runtime = "nodejs";
+
+function isSafeStoragePath(input: string): boolean {
+  if (!input.trim()) return false;
+  if (input.length > 600) return false;
+  if (input.includes("..")) return false;
+  if (input.startsWith("/")) return false;
+  return true;
+}
+
+function extractStoragePathsFromText(htmlOrText: string, out: Set<string>) {
+  const re = /\/api\/v2\/(?:course-assets|lesson-assets)\?path=([^"'&\s>]+)/g;
+  let m: RegExpExecArray | null = null;
+  while ((m = re.exec(htmlOrText))) {
+    const raw = m[1] ?? "";
+    if (!raw) continue;
+    try {
+      const decoded = decodeURIComponent(raw);
+      if (isSafeStoragePath(decoded)) out.add(decoded);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function collectCourseAssetPathsFromHtml(html: string | null): Set<string> {
+  const out = new Set<string>();
+  if (typeof html === "string" && html.trim().length) extractStoragePathsFromText(html, out);
+  return out;
+}
 
 function isOrgAdminOwner(caller: { role: string; organization_id?: string | null }, course: { organization_id: string | null }): boolean {
   return caller.role === "organization_admin" && !!caller.organization_id && caller.organization_id === course.organization_id;
@@ -190,7 +220,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   const admin = createAdminSupabaseClient();
   const { data: currentData, error: currentError } = await admin
     .from("courses")
-    .select("id, organization_id, title, slug, intro_video_provider, intro_video_url")
+    .select("id, organization_id, title, slug, intro_video_provider, intro_video_url, about_html")
     .eq("id", id)
     .single();
 
@@ -281,6 +311,10 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     }
   }
 
+  const shouldDiffAbout = Object.prototype.hasOwnProperty.call(patch, "about_html");
+  const oldAboutPaths = shouldDiffAbout ? collectCourseAssetPathsFromHtml((currentData as { about_html?: string | null }).about_html ?? null) : new Set<string>();
+  const newAboutPaths = shouldDiffAbout ? collectCourseAssetPathsFromHtml((updatePayload.about_html as string | null) ?? null) : new Set<string>();
+
   const { data: updatedData, error: updateError } = await admin
     .from("courses")
     .update(updatePayload)
@@ -291,6 +325,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     .single();
 
   if (updateError || !updatedData) {
+    const supportId = generateSupportId();
     await logApiEvent({
       request,
       caller,
@@ -299,8 +334,26 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       code: "INTERNAL",
       publicMessage: "Failed to update course.",
       internalMessage: updateError?.message,
+      details: { support_id: supportId },
     });
-    return apiError("INTERNAL", "Failed to update course.", { status: 500 });
+    return apiError("INTERNAL", "Failed to update course.", { status: 500, supportId });
+  }
+
+  // Best-effort cleanup (delayed): enqueue any removed inline assets from About Course HTML.
+  if (shouldDiffAbout) {
+    for (const p of oldAboutPaths) {
+      if (newAboutPaths.has(p)) continue;
+      const rpc = await admin.rpc("enqueue_asset_deletion", {
+        p_bucket_id: "course-lesson-assets",
+        p_object_name: p,
+        p_delay_seconds: 60 * 60 * 2,
+        p_requested_by: caller.id,
+        p_reason: "removed from course about_html",
+      });
+      if (rpc.error) {
+        // ignore
+      }
+    }
   }
 
   await logApiEvent({

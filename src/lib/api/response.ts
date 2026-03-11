@@ -17,6 +17,11 @@ export type ApiSuccess<T> = {
 
 export type ApiFailure = {
   success: false;
+  /**
+   * Short identifier safe to show to end users (e.g. "SR-7K2P9D").
+   * Present for unexpected/system errors so Support can correlate logs.
+   */
+  support_id?: string;
   error: {
     code: ApiErrorCode;
     message: string;
@@ -32,9 +37,10 @@ export function apiOk<T>(data: T, opts?: { status?: number; message?: string }) 
   return NextResponse.json(body, { status });
 }
 
-export function apiError(code: ApiErrorCode, message: string, opts?: { status?: number }) {
+export function apiError(code: ApiErrorCode, message: string, opts?: { status?: number; supportId?: string }) {
   const status = opts?.status ?? 500;
   const body: ApiFailure = { success: false, error: { code, message } };
+  if (opts?.supportId) body.support_id = opts.supportId;
   return NextResponse.json(body, { status });
 }
 

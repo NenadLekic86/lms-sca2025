@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
-import { fetchEnrollmentTestSummary, formatDurationSeconds } from "@/services/reporting.service";
+import { fetchEnrollmentSummary } from "@/services/reportingService";
 
 export const runtime = "nodejs";
 
@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
   const orgId = url.searchParams.get("orgId") || undefined;
   const courseId = url.searchParams.get("courseId") || undefined;
   const userId = url.searchParams.get("userId") || undefined;
-  const result = (url.searchParams.get("result") || "all") as "all" | "passed" | "failed" | "not_submitted";
+  const result = (url.searchParams.get("result") || "all") as "all" | "certified" | "not_certified";
   const q = url.searchParams.get("q") || undefined;
   const from = url.searchParams.get("from") || undefined;
   const to = url.searchParams.get("to") || undefined;
@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
     // ignore rate limit failures (do not block exports)
   }
 
-  const summary = await fetchEnrollmentTestSummary({
+  const summary = await fetchEnrollmentSummary({
     organizationId: effectiveOrgId,
     courseId,
     userId,
@@ -90,12 +90,8 @@ export async function GET(request: NextRequest) {
     course_id: r.course_id,
     course_title: r.course_title ?? "",
     enrolled_at: r.enrolled_at ?? "",
-    result: r.course_result ?? "",
-    attempts_submitted: r.submitted_count ?? 0,
-    attempts_total: r.attempt_count ?? 0,
-    total_time: formatDurationSeconds(r.total_duration_seconds),
-    latest_time: formatDurationSeconds(r.latest_attempt_duration_seconds),
-    latest_score: typeof r.latest_score === "number" ? r.latest_score : "",
+    certified: r.certified ? "yes" : "no",
+    certificate_issued_at: r.certificate_issued_at ?? "",
   }));
 
   const csv = buildCsv(exportRows);

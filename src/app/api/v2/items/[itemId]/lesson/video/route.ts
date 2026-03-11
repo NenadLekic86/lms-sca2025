@@ -31,8 +31,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ it
   if (!(file instanceof File)) return apiError("VALIDATION_ERROR", "Missing video file.", { status: 400 });
 
   if (file.type !== "video/mp4") return apiError("VALIDATION_ERROR", "Invalid file type (allowed: MP4).", { status: 400 });
-  const maxBytes = 50 * 1024 * 1024;
-  if (file.size > maxBytes) return apiError("VALIDATION_ERROR", "File too large (max 50MB).", { status: 400 });
+  const maxBytes = 300 * 1024 * 1024;
+  if (file.size > maxBytes) return apiError("VALIDATION_ERROR", "File too large (max 300MB).", { status: 400 });
 
   const admin = createAdminSupabaseClient();
   await ensureLessonAssetsBucket(admin);

@@ -97,7 +97,6 @@ export async function GET(request: NextRequest) {
   const orgIds = new Set<string>();
   const userIds = new Set<string>();
   const courseIds = new Set<string>();
-  const testIds = new Set<string>();
 
   for (const row of rows) {
     const meta = asRecord(row.metadata);
@@ -133,31 +132,19 @@ export async function GET(request: NextRequest) {
     ) {
       courseIds.add(row.entity_id);
     }
-
-    // tests
-    if (row.entity === "tests" && typeof row.entity_id === "string" && row.entity_id.length > 0) testIds.add(row.entity_id);
-    if (row.action === "update_test_builder" && typeof row.entity_id === "string" && row.entity_id.length > 0) testIds.add(row.entity_id);
-    if (row.action === "create_course_test") {
-      const tid = getMetaString(meta, "test_id");
-      if (tid) testIds.add(tid);
-    }
   }
 
   const orgLabelById = new Map<string, string>();
   const userDisplayById = new Map<string, { label: string; role: string | null }>();
   const courseLabelById = new Map<string, string>();
-  const testLabelById = new Map<string, string>();
-  const testCourseById = new Map<string, string | null>();
 
   const ORG_ID_LIMIT = 1000;
   const USER_ID_LIMIT = 1000;
   const COURSE_ID_LIMIT = 1000;
-  const TEST_ID_LIMIT = 1000;
 
   const orgIdList = takeFirst(Array.from(orgIds), ORG_ID_LIMIT);
   const userIdList = takeFirst(Array.from(userIds), USER_ID_LIMIT);
   const courseIdList = takeFirst(Array.from(courseIds), COURSE_ID_LIMIT);
-  const testIdList = takeFirst(Array.from(testIds), TEST_ID_LIMIT);
 
   if (orgIdList.length > 0) {
     const { data: orgData, error: orgError } = await admin.from("organizations").select("id, name, slug").in("id", orgIdList);
@@ -198,36 +185,6 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  if (testIdList.length > 0) {
-    const { data: testsData, error: testsError } = await admin.from("tests").select("id, title, course_id").in("id", testIdList);
-    if (!testsError && Array.isArray(testsData)) {
-      for (const t of testsData as Array<{ id?: unknown; title?: unknown; course_id?: unknown }>) {
-        const id = typeof t.id === "string" ? t.id : null;
-        if (!id) continue;
-        const title = typeof t.title === "string" && t.title.trim().length ? t.title.trim() : null;
-        const courseId = typeof t.course_id === "string" && t.course_id.length > 0 ? t.course_id : null;
-        testLabelById.set(id, title ?? "Untitled test");
-        testCourseById.set(id, courseId);
-      }
-    }
-  }
-
-  // hydrate missing courses referenced by tests (only for the small hydrated set)
-  const courseIdsFromTests = Array.from(new Set(Array.from(testCourseById.values()).filter((v): v is string => typeof v === "string" && v.length > 0)));
-  const missingCourseIds = courseIdsFromTests.filter((id) => !courseLabelById.has(id));
-  if (missingCourseIds.length > 0) {
-    const moreIds = takeFirst(missingCourseIds, COURSE_ID_LIMIT);
-    const { data: moreCourses, error: moreCoursesError } = await admin.from("courses").select("id, title").in("id", moreIds);
-    if (!moreCoursesError && Array.isArray(moreCourses)) {
-      for (const c of moreCourses as Array<{ id?: unknown; title?: unknown }>) {
-        const id = typeof c.id === "string" ? c.id : null;
-        if (!id) continue;
-        const title = typeof c.title === "string" && c.title.trim().length ? c.title.trim() : null;
-        courseLabelById.set(id, title ?? "Untitled course");
-      }
-    }
-  }
-
   const orgLabel = (orgId: string | null) => {
     if (!orgId) return "No organization";
     return orgLabelById.get(orgId) ?? orgId;
@@ -235,10 +192,6 @@ export async function GET(request: NextRequest) {
   const courseLabel = (courseId: string | null) => {
     if (!courseId) return "Unknown course";
     return courseLabelById.get(courseId) ?? courseId;
-  };
-  const testLabel = (testId: string | null) => {
-    if (!testId) return "Unknown test";
-    return testLabelById.get(testId) ?? testId;
   };
 
   const getTargetDisplay = (row: AuditLogRow) => {
@@ -308,10 +261,10 @@ export async function GET(request: NextRequest) {
     }
 
     if (row.entity === "tests" && typeof row.entity_id === "string" && row.entity_id.length > 0) {
-      return `tests (${testLabel(row.entity_id)})`;
+      return `tests (${row.entity_id})`;
     }
     if (row.action === "update_test_builder" && typeof row.entity_id === "string" && row.entity_id.length > 0) {
-      return `tests (${testLabel(row.entity_id)})`;
+      return `tests (${row.entity_id})`;
     }
 
     if (row.entity === "courses" && typeof row.entity_id === "string" && row.entity_id.length > 0) {
@@ -441,17 +394,14 @@ export async function GET(request: NextRequest) {
     if (row.action === "create_course_test") {
       const cid = typeof row.entity_id === "string" && row.entity_id.length > 0 ? row.entity_id : null;
       const tid = getMetaString(meta, "test_id");
-      const tName = tid ? testLabel(tid) : "Assessment";
-      return `${actorDisplay} created ${tName} for ${courseLabel(cid)}.`;
+      return `${actorDisplay} created a legacy assessment${tid ? ` (${tid})` : ""} for ${courseLabel(cid)}.`;
     }
 
     if (row.action === "update_test_builder") {
       const tid = typeof row.entity_id === "string" && row.entity_id.length > 0 ? row.entity_id : null;
       const count = getMetaNumber(meta, "questions");
       const countText = typeof count === "number" ? ` (${count} questions)` : "";
-      const cId = tid ? (testCourseById.get(tid) ?? null) : null;
-      const courseText = cId ? ` for ${courseLabel(cId)}` : "";
-      return `${actorDisplay} updated test builder${countText}: ${testLabel(tid)}${courseText}.`;
+      return `${actorDisplay} updated a legacy assessment${countText}${tid ? ` (${tid})` : ""}.`;
     }
 
     return "—";

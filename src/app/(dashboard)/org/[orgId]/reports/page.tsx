@@ -10,10 +10,10 @@ import { RecentEnrollmentsTableV2, type RecentEnrollmentItemV2 } from "@/compone
 import {
   fetchOrgReportStats,
   fetchEnrollmentsDaily,
-  fetchEnrollmentTestSummaryPage,
+  fetchEnrollmentSummaryPage,
   fetchTopCourses,
-  fetchTopUsersByPasses,
-} from "@/services/reporting.service";
+  fetchTopUsersByCertificates,
+} from "@/services/reportingService";
 
 export const fetchCache = "force-no-store";
 
@@ -72,7 +72,7 @@ export default async function OrgReportsPage({
   if (user.role === "organization_admin" && user.organization_id !== orgId) redirect("/unauthorized");
 
   const q = spGet(sp, "q") ?? "";
-  const result = (spGet(sp, "result") ?? "all") as "all" | "passed" | "failed" | "not_submitted";
+  const result = (spGet(sp, "result") ?? "all") as "all" | "certified" | "not_certified";
   const from = spGet(sp, "from") ?? "";
   const to = spGet(sp, "to") ?? "";
   const courseId = spGet(sp, "courseId") ?? "";
@@ -107,7 +107,7 @@ export default async function OrgReportsPage({
 
   const [stats, summaryPage, daily, topCoursesRes, topUsersRes] = await Promise.all([
     fetchOrgReportStats(orgId),
-    fetchEnrollmentTestSummaryPage({ ...filters, page, pageSize }),
+    fetchEnrollmentSummaryPage({ ...filters, page, pageSize }),
     fetchEnrollmentsDaily({
       organizationId: orgId,
       days: 14,
@@ -115,14 +115,14 @@ export default async function OrgReportsPage({
       to: to || undefined,
     }),
     fetchTopCourses({ ...filters, limit: 5 }),
-    fetchTopUsersByPasses({ ...filters, limit: 5 }),
+    fetchTopUsersByCertificates({ ...filters, limit: 5 }),
   ]);
 
   const cards = [
     { label: "Total Users", value: String(stats.usersCount), icon: Users },
     { label: "Enrollments", value: String(stats.enrollmentsCount), icon: BookOpen },
-    { label: "Passed", value: String(stats.passedCount), icon: Award },
-    { label: "Completion Rate", value: `${stats.completionRate}%`, icon: TrendingUp },
+    { label: "Certified", value: String(stats.certifiedCount), icon: Award },
+    { label: "Certification Rate", value: `${stats.certificationRate}%`, icon: TrendingUp },
   ];
 
   const topCourses = topCoursesRes.rows;
@@ -279,7 +279,7 @@ export default async function OrgReportsPage({
             )}
           </div>
 
-          <h2 className="text-lg font-semibold text-foreground mb-4 mt-6">Top Users (by passes)</h2>
+          <h2 className="text-lg font-semibold text-foreground mb-4 mt-6">Top Users (by certificates)</h2>
           <div className="space-y-3">
             {topUsers.length === 0 ? (
               <div className="text-sm text-muted-foreground">No data.</div>
@@ -324,22 +324,15 @@ export default async function OrgReportsPage({
               organization: null,
               user: userLabel,
               course: courseLabel,
-              result: r.course_result,
+              result: r.certified ? "certified" : "not_certified",
               enrollmentStatus: r.enrollment_status,
-              testTitle: r.test_title,
-              attemptCount: r.attempt_count,
-              submittedCount: r.submitted_count,
-              totalDurationSeconds: r.total_duration_seconds,
-              latestAttemptDurationSeconds: r.latest_attempt_duration_seconds,
-              latestScore: r.latest_score,
               enrolledAt: r.enrolled_at,
-              latestStartedAt: r.latest_started_at,
-              latestSubmittedAt: r.latest_submitted_at,
+              certificateIssuedAt: r.certificate_issued_at,
               meta: r,
             };
           })}
           emptyTitle="No enrollments yet."
-          emptySubtitle="Once users enroll and start taking tests, their progress will appear here."
+          emptySubtitle="Once users enroll, their status and certificates will appear here."
         />
 
         <div className="mt-4 flex items-center justify-between gap-3 text-sm">

@@ -6,10 +6,10 @@ import { RecentEnrollmentsTableV2, type RecentEnrollmentItemV2 } from "@/compone
 import { ReportFiltersClient } from "@/features/reporting/components/ReportFiltersClient";
 import {
   fetchEnrollmentsDaily,
-  fetchEnrollmentTestSummaryPage,
+  fetchEnrollmentSummaryPage,
   fetchTopCourses,
-  fetchTopUsersByPasses,
-} from "@/services/reporting.service";
+  fetchTopUsersByCertificates,
+} from "@/services/reportingService";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 function spGet(sp: SearchParams, key: string): string | null {
@@ -45,18 +45,6 @@ async function safeCount(admin: ReturnType<typeof createAdminSupabaseClient>, ta
   }
 }
 
-async function safeCompletedEnrollments(admin: ReturnType<typeof createAdminSupabaseClient>) {
-  try {
-    const { count, error } = await admin
-      .from("course_enrollments")
-      .select("*", { count: "exact", head: true })
-      .not("completed_at", "is", null);
-    return { count: typeof count === "number" ? count : 0, error: error?.message ?? null };
-  } catch (e) {
-    return { count: 0, error: e instanceof Error ? e.message : "Unknown error" };
-  }
-}
-
 export default async function SystemReportsPage({
   searchParams,
 }: {
@@ -69,7 +57,7 @@ export default async function SystemReportsPage({
 
   const orgId = spGet(sp, "orgId") ?? "";
   const q = spGet(sp, "q") ?? "";
-  const result = (spGet(sp, "result") ?? "all") as "all" | "passed" | "failed" | "not_submitted";
+  const result = (spGet(sp, "result") ?? "all") as "all" | "certified" | "not_certified";
   const from = spGet(sp, "from") ?? "";
   const to = spGet(sp, "to") ?? "";
   const courseId = spGet(sp, "courseId") ?? "";
@@ -98,7 +86,7 @@ export default async function SystemReportsPage({
       .join(" ");
   }
 
-  const [orgLookup, courseLookup, userLookup, users, courses, certificates, enrollments, completions, summaryPage, daily, topCoursesRes, topUsersRes] = await Promise.all([
+  const [orgLookup, courseLookup, userLookup, users, courses, certificates, enrollments, summaryPage, daily, topCoursesRes, topUsersRes] = await Promise.all([
     orgId ? admin.from("organizations").select("name, slug").eq("id", orgId).maybeSingle() : Promise.resolve({ data: null, error: null }),
     courseId ? admin.from("courses").select("title").eq("id", courseId).maybeSingle() : Promise.resolve({ data: null, error: null }),
     userId ? admin.from("users").select("full_name, email").eq("id", userId).maybeSingle() : Promise.resolve({ data: null, error: null }),
@@ -106,8 +94,7 @@ export default async function SystemReportsPage({
     safeCount(admin, "courses"),
     safeCount(admin, "certificates"),
     safeCount(admin, "course_enrollments"),
-    safeCompletedEnrollments(admin),
-    fetchEnrollmentTestSummaryPage({ ...filters, page, pageSize }),
+    fetchEnrollmentSummaryPage({ ...filters, page, pageSize }),
     fetchEnrollmentsDaily({
       organizationId: orgId || undefined,
       days: 14,
@@ -115,7 +102,7 @@ export default async function SystemReportsPage({
       to: to || undefined,
     }),
     fetchTopCourses({ ...filters, limit: 5 }),
-    fetchTopUsersByPasses({ ...filters, limit: 5 }),
+    fetchTopUsersByCertificates({ ...filters, limit: 5 }),
   ]);
 
   const orgLabel = (
@@ -128,13 +115,13 @@ export default async function SystemReportsPage({
     (userLookup.data && typeof userLookup.data.email === "string" ? userLookup.data.email : "")
   ).trim();
 
-  const completionRate = enrollments.count > 0 ? Math.round((completions.count / enrollments.count) * 100) : 0;
+  const certificationRate = enrollments.count > 0 ? Math.round((certificates.count / enrollments.count) * 100) : 0;
 
   const stats = [
     { label: "Total Users", value: String(users.count), icon: Users, error: users.error },
     { label: "Total Courses", value: String(courses.count), icon: BookOpen, error: courses.error },
     { label: "Certificates Issued", value: String(certificates.count), icon: Award, error: certificates.error },
-    { label: "Completion Rate", value: `${completionRate}%`, icon: TrendingUp, error: completions.error || enrollments.error },
+    { label: "Certification Rate", value: `${certificationRate}%`, icon: TrendingUp, error: certificates.error || enrollments.error },
   ];
 
   const exportParams = new URLSearchParams();
@@ -273,7 +260,7 @@ export default async function SystemReportsPage({
               )}
             </div>
 
-            <h2 className="text-lg font-semibold text-foreground mb-4 mt-6">Top Users (by passes)</h2>
+            <h2 className="text-lg font-semibold text-foreground mb-4 mt-6">Top Users (by certificates)</h2>
             <div className="space-y-3">
               {topUsers.length === 0 ? (
                 <div className="text-sm text-muted-foreground">No data.</div>
@@ -325,22 +312,15 @@ export default async function SystemReportsPage({
                 organization: orgLabel,
                 user: userLabel,
                 course: courseLabel,
-                result: r.course_result,
+                result: r.certified ? "certified" : "not_certified",
                 enrollmentStatus: r.enrollment_status,
-                testTitle: r.test_title,
-                attemptCount: r.attempt_count,
-                submittedCount: r.submitted_count,
-                totalDurationSeconds: r.total_duration_seconds,
-                latestAttemptDurationSeconds: r.latest_attempt_duration_seconds,
-                latestScore: r.latest_score,
                 enrolledAt: r.enrolled_at,
-                latestStartedAt: r.latest_started_at,
-                latestSubmittedAt: r.latest_submitted_at,
+                certificateIssuedAt: r.certificate_issued_at,
                 meta: r,
               };
             })}
             emptyTitle="No enrollments yet."
-            emptySubtitle="Once users start enrolling and taking tests, their progress will appear here."
+            emptySubtitle="Once users enroll, their status and certificates will appear here."
           />
 
           <div className="mt-4 flex items-center justify-between gap-3 text-sm">

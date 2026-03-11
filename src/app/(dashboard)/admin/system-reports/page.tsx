@@ -29,6 +29,22 @@ type UnauthApiRow = {
   details?: unknown;
 };
 
+type SupportReportRow = {
+  id: string;
+  created_at?: string | null;
+  support_id?: string | null;
+  source?: string | null;
+  step?: string | null;
+  reporter_email?: string | null;
+  reporter_role?: string | null;
+  organization_id?: string | null;
+  page_url?: string | null;
+  user_agent?: string | null;
+  is_resolved?: boolean | null;
+  resolved_at?: string | null;
+  payload?: unknown;
+};
+
 type SearchParams = Record<string, string | string[] | undefined>;
 function spGet(sp: SearchParams, key: string): string | null {
   const v = sp[key];
@@ -121,6 +137,16 @@ export default async function SystemReportsPage({
     .limit(30);
 
   const unauthRows = (Array.isArray(unauthData) ? unauthData : []) as UnauthApiRow[];
+
+  const { data: supportData, error: supportError } = await admin
+    .from("support_reports")
+    .select(
+      "id, created_at, support_id, source, step, reporter_email, reporter_role, organization_id, page_url, user_agent, is_resolved, resolved_at, payload"
+    )
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  const supportRows = (Array.isArray(supportData) ? supportData : []) as SupportReportRow[];
 
   const pageHref = (p: number) => {
     const u = new URLSearchParams();
@@ -319,6 +345,98 @@ export default async function SystemReportsPage({
             </>
           );
         })()}
+      </div>
+
+      <div className="pt-2">
+        <h2 className="text-xl font-semibold text-foreground">Support reports</h2>
+        <p className="text-sm text-muted-foreground">
+          User-submitted error reports from the app (stored in <span className="font-mono">support_reports</span>).
+        </p>
+      </div>
+
+      {supportError ? (
+        <div className="rounded-md border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          Failed to load support reports: {supportError.message}
+          <div className="mt-1 text-xs text-muted-foreground">
+            Make sure the <span className="font-mono">support_reports</span> SQL was applied in this environment.
+          </div>
+        </div>
+      ) : null}
+
+      <div className="bg-card border rounded-lg shadow-sm overflow-hidden">
+        <div className="w-full overflow-x-auto">
+          <table className="min-w-max w-full">
+            <thead className="bg-muted/50">
+              <tr>
+                <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Timestamp</th>
+                <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Support ID</th>
+                <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Step</th>
+                <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Reporter</th>
+                <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Status</th>
+                <th className="text-left px-6 py-3 text-sm font-medium text-muted-foreground">Details</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {supportRows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-10 text-center text-muted-foreground">
+                    No support reports yet.
+                  </td>
+                </tr>
+              ) : (
+                supportRows.map((r) => {
+                  const resolved = Boolean(r.is_resolved);
+                  return (
+                    <tr key={r.id} className="hover:bg-muted/30 transition-colors">
+                      <td className="px-6 py-4 text-sm text-muted-foreground font-mono">
+                        {r.created_at ? new Date(r.created_at).toLocaleString() : "—"}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-foreground font-mono">{r.support_id ?? "—"}</td>
+                      <td className="px-6 py-4 text-sm text-foreground">
+                        <div className="text-xs text-muted-foreground">{r.source ?? "—"}</div>
+                        <div className="mt-1">{r.step ?? "—"}</div>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-muted-foreground">
+                        {r.reporter_email ? `${r.reporter_email}${r.reporter_role ? ` (${r.reporter_role})` : ""}` : "—"}
+                        {r.organization_id ? (
+                          <div className="mt-1 font-mono text-xs text-muted-foreground">org: {r.organization_id}</div>
+                        ) : null}
+                      </td>
+                      <td className="px-6 py-4 text-sm">
+                        <span
+                          className={`px-2 py-1 text-xs font-medium rounded-full ${
+                            resolved ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-800"
+                          }`}
+                        >
+                          {resolved ? "Resolved" : "Open"}
+                        </span>
+                        {resolved && r.resolved_at ? (
+                          <div className="mt-1 text-xs text-muted-foreground">at {new Date(r.resolved_at).toLocaleString()}</div>
+                        ) : null}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-muted-foreground">
+                        <details>
+                          <summary className="cursor-pointer select-none">View</summary>
+                          <pre className="mt-2 max-w-[680px] overflow-auto rounded-md border bg-muted/20 p-3 text-xs">
+{JSON.stringify(
+  {
+    page_url: r.page_url ?? null,
+    user_agent: r.user_agent ?? null,
+    payload: r.payload ?? null,
+  },
+  null,
+  2
+)}
+                          </pre>
+                        </details>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="pt-2">

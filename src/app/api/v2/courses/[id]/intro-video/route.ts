@@ -60,11 +60,14 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   const admin = createAdminSupabaseClient();
   const { data: row, error: rowError } = await admin
     .from("courses")
-    .select("id, organization_id")
+    .select("id, organization_id, intro_video_storage_path")
     .eq("id", id)
     .single();
   if (rowError || !row?.id) return apiError("NOT_FOUND", "Course not found.", { status: 404 });
   if (row.organization_id !== caller.organization_id) return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+
+  const prevStoragePath =
+    typeof row.intro_video_storage_path === "string" && row.intro_video_storage_path.trim().length > 0 ? row.intro_video_storage_path.trim() : null;
 
   const now = new Date().toISOString();
 
@@ -78,9 +81,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       return apiError("VALIDATION_ERROR", "Invalid file type (allowed: MP4).", { status: 400 });
     }
 
-    const maxBytes = 50 * 1024 * 1024; // 50MB
+    const maxBytes = 300 * 1024 * 1024; // 300MB
     if (file.size > maxBytes) {
-      return apiError("VALIDATION_ERROR", "File too large (max 50MB).", { status: 400 });
+      return apiError("VALIDATION_ERROR", "File too large (max 300MB).", { status: 400 });
     }
 
     const ext = getExtFromMime(file.type);
@@ -118,6 +121,20 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       .eq("id", id);
 
     if (updateError) return apiError("INTERNAL", "Failed to save intro video.", { status: 500 });
+
+    // Best-effort cleanup (delayed): enqueue the previous intro object if replaced.
+    if (prevStoragePath && prevStoragePath !== path) {
+      const rpc = await admin.rpc("enqueue_asset_deletion", {
+        p_bucket_id: "course-intro-videos",
+        p_object_name: prevStoragePath,
+        p_delay_seconds: 60 * 60 * 2,
+        p_requested_by: caller.id,
+        p_reason: "replaced intro video (legacy upload)",
+      });
+      if (rpc.error) {
+        // ignore
+      }
+    }
 
     return apiOk(
       {
@@ -161,6 +178,20 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     })
     .eq("id", id);
   if (updateError) return apiError("INTERNAL", "Failed to save intro video URL.", { status: 500 });
+
+  // Best-effort cleanup (delayed): if we switched away from HTML5, enqueue any prior stored intro object.
+  if (prevStoragePath) {
+    const rpc = await admin.rpc("enqueue_asset_deletion", {
+      p_bucket_id: "course-intro-videos",
+      p_object_name: prevStoragePath,
+      p_delay_seconds: 60 * 60 * 2,
+      p_requested_by: caller.id,
+      p_reason: "switched intro video provider",
+    });
+    if (rpc.error) {
+      // ignore
+    }
+  }
 
   return apiOk(
     {

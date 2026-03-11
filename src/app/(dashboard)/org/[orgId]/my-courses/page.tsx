@@ -121,27 +121,9 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
 
   const coursesAll = (Array.isArray(coursesData) ? coursesData : []) as CourseRow[];
 
-  const v1CourseIds = coursesAll
-    .filter((c) => (c.builder_version ?? null) !== 2)
-    .map((c) => c.id);
   const v2CourseIds = coursesAll
     .filter((c) => (c.builder_version ?? null) === 2)
     .map((c) => c.id);
-
-  // V1 progress: resources/videos + completion rows.
-  const { data: resourcesData } = v1CourseIds.length
-    ? await supabase.from("course_resources").select("id, course_id").in("course_id", v1CourseIds)
-    : { data: [] };
-  const { data: videosData } = v1CourseIds.length
-    ? await supabase.from("course_videos").select("id, course_id").in("course_id", v1CourseIds)
-    : { data: [] };
-  const { data: progressData } = v1CourseIds.length
-    ? await supabase
-        .from("course_content_progress")
-        .select("course_id, item_type, item_id, completed_at")
-        .in("course_id", v1CourseIds)
-        .eq("user_id", user.id)
-    : { data: [] };
 
   // V2 progress: total items + visits.
   const { data: v2ItemsData } = v2CourseIds.length
@@ -156,25 +138,12 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
     : { data: [] };
 
   const totalByCourse: Record<string, number> = {};
-  for (const r of (Array.isArray(resourcesData) ? resourcesData : []) as Array<{ course_id?: string | null }>) {
-    if (!r.course_id) continue;
-    totalByCourse[r.course_id] = (totalByCourse[r.course_id] || 0) + 1;
-  }
-  for (const v of (Array.isArray(videosData) ? videosData : []) as Array<{ course_id?: string | null }>) {
-    if (!v.course_id) continue;
-    totalByCourse[v.course_id] = (totalByCourse[v.course_id] || 0) + 1;
-  }
   for (const it of (Array.isArray(v2ItemsData) ? v2ItemsData : []) as Array<{ course_id?: string | null }>) {
     if (!it.course_id) continue;
     totalByCourse[it.course_id] = (totalByCourse[it.course_id] || 0) + 1;
   }
 
   const completedByCourse: Record<string, number> = {};
-  for (const p of (Array.isArray(progressData) ? progressData : []) as Array<{ course_id?: string | null; completed_at?: string | null }>) {
-    if (!p.course_id) continue;
-    if (!p.completed_at) continue;
-    completedByCourse[p.course_id] = (completedByCourse[p.course_id] || 0) + 1;
-  }
   for (const v of (Array.isArray(v2VisitsData) ? v2VisitsData : []) as Array<{ course_id?: string | null; visited_at?: string | null }>) {
     if (!v.course_id) continue;
     if (!v.visited_at) continue;
@@ -202,8 +171,11 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
     }
   };
 
+  // V2-only: legacy (builder_version != 2) courses are no longer supported.
   // My Courses should show only started/in-progress courses (not-started belongs in Courses catalog).
-  const courses = coursesAll.filter((c) => derivedStatus(c.id) !== "not_started");
+  const courses = coursesAll
+    .filter((c) => (c.builder_version ?? null) === 2)
+    .filter((c) => derivedStatus(c.id) !== "not_started");
 
   const inProgressCount = courses.filter((c) => derivedStatus(c.id) === "in_progress").length;
   const completedCount = courses.filter((c) => derivedStatus(c.id) === "completed").length;
