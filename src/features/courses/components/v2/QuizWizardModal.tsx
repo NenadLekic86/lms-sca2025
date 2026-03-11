@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { coercePercentInt, sanitizePercentIntText } from "@/lib/percentInput";
 import { RichTextEditorWithUploads } from "@/features/courses/components/v2/RichTextEditorWithUploads";
 import { revokeInlineQueueObjectUrls, type InlineImageQueue } from "@/lib/richtext/inlineImages";
 
@@ -727,6 +728,7 @@ export function QuizWizardModal({
   const [summary, setSummary] = useState(init.summary ?? initialSummary);
   const [questions, setQuestions] = useState<QuizQuestion[]>(init.questions ?? []);
   const [settings, setSettings] = useState<QuizSettings>(init.settings);
+  const [passingGradePercentInput, setPassingGradePercentInput] = useState<string>(() => String(init.settings.passing_grade_percent ?? 0));
 
   const [editingQuestion, setEditingQuestion] = useState<QuizQuestion | null>(null);
   const [optionEditorId, setOptionEditorId] = useState<string | null>(null);
@@ -1844,12 +1846,26 @@ export function QuizWizardModal({
               <div>
                 <QFieldLabel accent="#1b8755">Passing Grade (%)</QFieldLabel>
                 <Input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={settings.passing_grade_percent}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={passingGradePercentInput}
                   className={cn(focusField)}
-                  onChange={(e) => setSettings((prev) => ({ ...prev, passing_grade_percent: clampInt(Number(e.target.value || 0), 0, 100) }))}
+                  onChange={(e) => {
+                    const next = sanitizePercentIntText(e.target.value);
+                    setPassingGradePercentInput(next);
+                    setSettings((prev) => ({ ...prev, passing_grade_percent: coercePercentInt(next) }));
+                  }}
+                  onBlur={() => {
+                    if (!passingGradePercentInput.trim()) {
+                      setPassingGradePercentInput("0");
+                      setSettings((prev) => ({ ...prev, passing_grade_percent: 0 }));
+                      return;
+                    }
+                    const next = sanitizePercentIntText(passingGradePercentInput);
+                    setPassingGradePercentInput(next || "0");
+                    setSettings((prev) => ({ ...prev, passing_grade_percent: coercePercentInt(next) }));
+                  }}
                 />
                 <div className="mt-1 text-xs text-muted-foreground">Set the passing percentage for this quiz</div>
               </div>

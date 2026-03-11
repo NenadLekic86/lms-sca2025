@@ -2299,7 +2299,7 @@ function UserDetailsDrawer(props: {
                           }
                         }}
                       >
-                        Setup link
+                        Reset Password
                       </Button>
                       <HelpText>
                         Sends the user a secure email link to set or reset their password and finish onboarding.
@@ -3127,7 +3127,7 @@ function MobileUserCard(props: {
                           }
                         }}
                       >
-                        Setup link
+                        Reset Password
                       </Button>
                       <HelpText className={selected ? "text-white/80" : ""}>
                         Sends the user a secure email link to set or reset their password and finish onboarding.

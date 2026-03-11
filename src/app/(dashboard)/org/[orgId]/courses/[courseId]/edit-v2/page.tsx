@@ -47,8 +47,13 @@ export default async function OrgCourseEditV2Page({
   const supabase = await createServerSupabaseClient();
   const admin = createAdminSupabaseClient();
 
-  const [{ data: courseRow, error: courseError }, { data: topicsData }, { data: itemsData }, { data: membersData }, { data: assignedData }] =
-    await Promise.all([
+  const [
+    { data: courseRow, error: courseError },
+    { data: topicsData },
+    { data: itemsData },
+    { data: membersData, error: membersError },
+    { data: assignedData },
+  ] = await Promise.all([
       supabase
         .from("courses")
         .select(
@@ -67,7 +72,7 @@ export default async function OrgCourseEditV2Page({
         .select("id, full_name, email")
         .eq("organization_id", orgId)
         .eq("role", "member")
-        .neq("is_active", false)
+        .or("is_active.is.null,is_active.eq.true")
         .order("full_name", { ascending: true }),
       supabase
         .from("course_member_assignments")
@@ -78,6 +83,9 @@ export default async function OrgCourseEditV2Page({
 
   if (courseError || !courseRow) redirect(`/org/${orgSlug}/courses`);
   if ((courseRow.organization_id ?? null) !== orgId) redirect("/unauthorized");
+  if (membersError) {
+    throw new Error(`Failed to load members: ${membersError.message}`);
+  }
 
   const memberOptions: MemberOption[] = (Array.isArray(membersData) ? membersData : [])
     .map((m) => {

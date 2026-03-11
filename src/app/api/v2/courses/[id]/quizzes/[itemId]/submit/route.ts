@@ -319,7 +319,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     const [{ data: certSettings }, { data: certTemplate }] = await Promise.all([
       admin
         .from("course_certificate_settings")
-        .select("enabled, course_passing_grade_percent, name_placement_json")
+        .select("course_passing_grade_percent, name_placement_json")
         .eq("course_id", courseId)
         .maybeSingle(),
       admin
@@ -329,7 +329,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         .maybeSingle(),
     ]);
 
-    const enabled = Boolean(certSettings?.enabled ?? false);
     const threshold =
       certSettings && Number.isFinite(Number((certSettings as { course_passing_grade_percent?: unknown }).course_passing_grade_percent))
         ? Math.max(0, Math.min(100, Math.floor(Number((certSettings as { course_passing_grade_percent: number }).course_passing_grade_percent))))
@@ -337,7 +336,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     const placementOk = Boolean(certSettings && (certSettings as { name_placement_json?: unknown }).name_placement_json);
     const templateOk = Boolean(certTemplate?.id);
 
-    if (enabled && threshold > 0 && placementOk && templateOk) {
+    // "enabled" is implicit: only when passing grade > 0.
+    if (threshold > 0 && placementOk && templateOk) {
       // Determine which quizzes count toward the course grade:
       // Prefer required quizzes; if none are marked required, fall back to all quizzes.
       const { data: quizItems } = await admin

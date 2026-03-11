@@ -14,6 +14,7 @@ type Placement = {
   wPct?: number;
   hPct?: number;
   fontSize?: number;
+  fontFamily?: "helvetica" | "helvetica_bold" | "times" | "times_bold" | "courier" | "courier_bold";
   color?: string;
   align?: "left" | "center" | "right";
 };
@@ -39,6 +40,32 @@ function safeFilename(base: string) {
   const s = base.trim().replace(/\s+/g, " ");
   const cleaned = s.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-");
   return cleaned.slice(0, 120) || "certificate";
+}
+
+function pickStandardFontName(family: Placement["fontFamily"] | undefined): StandardFonts {
+  if (family === "helvetica") return StandardFonts.Helvetica;
+  if (family === "times") return StandardFonts.TimesRoman;
+  if (family === "times_bold") return StandardFonts.TimesRomanBold;
+  if (family === "courier") return StandardFonts.Courier;
+  if (family === "courier_bold") return StandardFonts.CourierBold;
+  return StandardFonts.HelveticaBold;
+}
+
+function fitFontSizeToWidth(args: {
+  font: { widthOfTextAtSize: (text: string, size: number) => number };
+  text: string;
+  desired: number;
+  maxWidth: number | null;
+}): number {
+  const desired = Math.max(6, Math.min(200, args.desired));
+  if (!args.maxWidth || args.maxWidth <= 0) return desired;
+  let s = desired;
+  for (let i = 0; i < 60; i++) {
+    const w = args.font.widthOfTextAtSize(args.text, s);
+    if (w <= args.maxWidth || s <= 6) break;
+    s = Math.max(6, s - 1);
+  }
+  return s;
 }
 
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -95,7 +122,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
       .maybeSingle(),
     admin
       .from("course_certificate_settings")
-      .select("enabled, certificate_title, course_passing_grade_percent, name_placement_json")
+      .select("certificate_title, course_passing_grade_percent, name_placement_json")
       .eq("course_id", courseId)
       .maybeSingle(),
     admin.from("users").select("id, full_name, email").eq("id", userId).maybeSingle(),
@@ -103,7 +130,11 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
   ]);
 
   if (!tpl?.storage_bucket || !tpl.storage_path) return apiError("NOT_FOUND", "Certificate template not found.", { status: 404 });
-  if (!settings?.enabled) return apiError("CONFLICT", "Certificate is not enabled for this course.", { status: 409 });
+  const threshold =
+    settings && Number.isFinite(Number((settings as { course_passing_grade_percent?: unknown }).course_passing_grade_percent))
+      ? Math.max(0, Math.min(100, Math.floor(Number((settings as { course_passing_grade_percent: number }).course_passing_grade_percent))))
+      : 0;
+  if (!(threshold > 0)) return apiError("CONFLICT", "Certificate is disabled for this course (passing grade is 0).", { status: 409 });
 
   const placementRaw = (settings as { name_placement_json?: unknown }).name_placement_json;
   const placement = (placementRaw && typeof placementRaw === "object" ? (placementRaw as Placement) : null) as Placement | null;
@@ -143,8 +174,10 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
   const pageW = targetPage.getWidth();
   const pageH = targetPage.getHeight();
 
-  const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const fontSize = Number.isFinite(Number(placement.fontSize)) ? Math.max(6, Math.min(200, Number(placement.fontSize))) : 32;
+  const font = await pdfDoc.embedFont(pickStandardFontName(placement.fontFamily));
+  const desiredFontSize = Number.isFinite(Number(placement.fontSize)) ? Math.max(6, Math.min(200, Number(placement.fontSize))) : 32;
+  const maxTextWidth = placement.wPct !== undefined ? clamp01(Number(placement.wPct)) * pageW : null;
+  const fontSize = fitFontSizeToWidth({ font, text: displayName, desired: desiredFontSize, maxWidth: maxTextWidth });
   const align = placement.align === "left" || placement.align === "right" || placement.align === "center" ? placement.align : "center";
   const color = parseHexColor(placement.color) ?? { r: 0.07, g: 0.07, b: 0.07 };
 

@@ -13,9 +13,20 @@ export type CertificateNamePlacement = {
   wPct?: number; // 0..1 (optional)
   hPct?: number; // 0..1 (optional)
   fontSize?: number;
+  fontFamily?: "helvetica" | "helvetica_bold" | "times" | "times_bold" | "courier" | "courier_bold";
   color?: string;
   align?: "left" | "center" | "right";
 };
+
+const PREVIEW_NAME = "Olivia Jane";
+const COLOR_PRESETS: Array<{ label: string; hex: string }> = [
+  { label: "Black", hex: "#111111" },
+  { label: "Slate", hex: "#334155" },
+  { label: "Navy", hex: "#0f172a" },
+  { label: "Emerald", hex: "#047857" },
+  { label: "Orange", hex: "#F58131" },
+  { label: "Purple", hex: "#6d28d9" },
+];
 
 export function CertificatePlacementModal({
   open,
@@ -56,6 +67,7 @@ export function CertificatePlacementModal({
         wPct: 0.42,
         hPct: 0.08,
         fontSize: 32,
+        fontFamily: "helvetica_bold",
         color: "#111111",
         align: "center",
       }
@@ -216,12 +228,73 @@ export function CertificatePlacementModal({
     }));
   }
 
-  const dragRef = useRef<{ active: boolean; lastX: number; lastY: number }>({ active: false, lastX: 0, lastY: 0 });
+  type DragMode = "drag" | "resize";
+  const dragRef = useRef<{
+    active: boolean;
+    mode: DragMode;
+    edgeX: -1 | 0 | 1; // -1 = left edge, 1 = right edge
+    edgeY: -1 | 0 | 1; // -1 = top edge, 1 = bottom edge
+    lastX: number;
+    lastY: number;
+  }>({ active: false, mode: "drag", edgeX: 0, edgeY: 0, lastX: 0, lastY: 0 });
+
+  function clampFontSize(n: number) {
+    if (!Number.isFinite(n)) return 32;
+    return Math.max(6, Math.min(200, Math.round(n)));
+  }
+
+  function applyResize(dx: number, dy: number, edgeX: -1 | 0 | 1, edgeY: -1 | 0 | 1) {
+    const w = viewportSize.w || 1;
+    const h = viewportSize.h || 1;
+    const minW = 60;
+    const minH = 26;
+
+    setPlacement((prev) => {
+      const curW = Math.max(minW, Math.round((prev.wPct ?? 0.42) * w));
+      const curH = Math.max(minH, Math.round((prev.hPct ?? 0.08) * h));
+      const curX = clamp01(prev.xPct) * w;
+      const curY = clamp01(prev.yPct) * h;
+
+      const nextW = Math.max(minW, Math.min(w, curW + dx * edgeX));
+      const nextH = Math.max(minH, Math.min(h, curH + dy * edgeY));
+
+      const nextX = edgeX !== 0 ? curX + dx / 2 : curX;
+      const nextY = edgeY !== 0 ? curY + dy / 2 : curY;
+
+      // Tie font size to the resized box height (simple + effective).
+      const nextFontSize = clampFontSize(nextH * 0.62);
+
+      return {
+        ...prev,
+        xPct: clamp01(nextX / w),
+        yPct: clamp01(nextY / h),
+        wPct: clamp01(nextW / w),
+        hPct: clamp01(nextH / h),
+        fontSize: nextFontSize,
+      };
+    });
+  }
 
   function onBoxMouseDown(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    dragRef.current = { active: true, lastX: e.clientX, lastY: e.clientY };
+    const el = e.currentTarget as HTMLElement | null;
+    const rect = el ? el.getBoundingClientRect() : null;
+    const threshold = 10;
+    let edgeX: -1 | 0 | 1 = 0;
+    let edgeY: -1 | 0 | 1 = 0;
+    if (rect) {
+      const ox = e.clientX - rect.left;
+      const oy = e.clientY - rect.top;
+      const nearLeft = ox <= threshold;
+      const nearRight = rect.width - ox <= threshold;
+      const nearTop = oy <= threshold;
+      const nearBottom = rect.height - oy <= threshold;
+      edgeX = nearLeft ? -1 : nearRight ? 1 : 0;
+      edgeY = nearTop ? -1 : nearBottom ? 1 : 0;
+    }
+    const mode: DragMode = edgeX !== 0 || edgeY !== 0 ? "resize" : "drag";
+    dragRef.current = { active: true, mode, edgeX, edgeY, lastX: e.clientX, lastY: e.clientY };
   }
 
   useEffect(() => {
@@ -232,7 +305,11 @@ export function CertificatePlacementModal({
       const dy = e.clientY - dragRef.current.lastY;
       dragRef.current.lastX = e.clientX;
       dragRef.current.lastY = e.clientY;
-      applyDrag(dx, dy);
+      if (dragRef.current.mode === "resize") {
+        applyResize(dx, dy, dragRef.current.edgeX, dragRef.current.edgeY);
+      } else {
+        applyDrag(dx, dy);
+      }
     }
     function onUp() {
       dragRef.current.active = false;
@@ -326,7 +403,7 @@ export function CertificatePlacementModal({
                       role="button"
                       tabIndex={0}
                       onMouseDown={onBoxMouseDown}
-                      className={cn("absolute select-none")}
+                      className={cn("absolute select-none group")}
                       style={{
                         left: `${Math.max(0, boxPx.x - Math.round(boxPx.w / 2))}px`,
                         top: `${Math.max(0, boxPx.y - Math.round(boxPx.h / 2))}px`,
@@ -342,9 +419,40 @@ export function CertificatePlacementModal({
                         cursor: "move",
                         padding: "6px 10px",
                       }}
-                      title="Drag to position"
+                      title="Drag to position (resize from edges)"
                     >
-                      <span style={{ fontWeight: 800, color: "#1b6bb8", fontSize: "13px", textAlign: "center" }}>Full name</span>
+                      {/* Resize hints (visual only; resizing is edge-detection on the box) */}
+                      <div className="pointer-events-none absolute -left-1 -top-1 h-5 w-5 rounded-md border bg-white/90 shadow-sm opacity-0 transition-opacity group-hover:opacity-100 flex items-center justify-center">
+                        <span className="text-[12px] font-bold text-slate-700">+</span>
+                      </div>
+                      <div className="pointer-events-none absolute -right-1 -top-1 h-5 w-5 rounded-md border bg-white/90 shadow-sm opacity-0 transition-opacity group-hover:opacity-100 flex items-center justify-center">
+                        <span className="text-[12px] font-bold text-slate-700">+</span>
+                      </div>
+                      <div className="pointer-events-none absolute -left-1 -bottom-1 h-5 w-5 rounded-md border bg-white/90 shadow-sm opacity-0 transition-opacity group-hover:opacity-100 flex items-center justify-center">
+                        <span className="text-[12px] font-bold text-slate-700">+</span>
+                      </div>
+                      <div className="pointer-events-none absolute -right-1 -bottom-1 h-5 w-5 rounded-md border bg-white/90 shadow-sm opacity-0 transition-opacity group-hover:opacity-100 flex items-center justify-center">
+                        <span className="text-[12px] font-bold text-slate-700">+</span>
+                      </div>
+
+                      <span
+                        style={{
+                          fontWeight: 800,
+                          color: placement.color ?? "#111111",
+                          fontSize: `${Math.max(12, Math.min(72, Number(placement.fontSize ?? 32) * 0.65))}px`,
+                          textAlign: placement.align ?? "center",
+                          width: "100%",
+                          lineHeight: 1.05,
+                          fontFamily:
+                            placement.fontFamily === "times" || placement.fontFamily === "times_bold"
+                              ? "ui-serif, Georgia, 'Times New Roman', serif"
+                              : placement.fontFamily === "courier" || placement.fontFamily === "courier_bold"
+                                ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
+                                : "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif",
+                        }}
+                      >
+                        {PREVIEW_NAME}
+                      </span>
                     </div>
                   ) : null}
                 </div>
@@ -362,8 +470,56 @@ export function CertificatePlacementModal({
 
               <div className="rounded-xl border p-4 space-y-2">
                 <div className="text-sm font-semibold text-foreground">Preview text</div>
-                <div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm font-semibold">John Doe</div>
+                <div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm font-semibold">{PREVIEW_NAME}</div>
                 <div className="text-xs text-muted-foreground">We’ll replace this with the learner’s full name when generating certificates.</div>
+              </div>
+
+              <div className="rounded-xl border p-4 space-y-3">
+                <div className="text-sm font-semibold text-foreground">Font</div>
+                <select
+                  className="w-full rounded-lg border bg-white px-3 py-2 text-sm"
+                  value={placement.fontFamily ?? "helvetica_bold"}
+                  onChange={(e) => {
+                    const v = e.target.value as CertificateNamePlacement["fontFamily"];
+                    setPlacement((p) => ({ ...p, fontFamily: v }));
+                  }}
+                >
+                  <option value="helvetica_bold">Helvetica Bold</option>
+                  <option value="helvetica">Helvetica</option>
+                  <option value="times_bold">Times Bold</option>
+                  <option value="times">Times</option>
+                  <option value="courier_bold">Courier Bold</option>
+                  <option value="courier">Courier</option>
+                </select>
+                <div className="text-xs text-muted-foreground">Uses PDF built-in fonts for maximum compatibility.</div>
+              </div>
+
+              <div className="rounded-xl border p-4 space-y-3">
+                <div className="text-sm font-semibold text-foreground">Color</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {COLOR_PRESETS.map((c) => {
+                    const selected = (placement.color ?? "#111111").toLowerCase() === c.hex.toLowerCase();
+                    return (
+                      <button
+                        key={c.hex}
+                        type="button"
+                        className={cn(
+                          "flex items-center gap-2 rounded-lg border px-2 py-2 text-left text-xs transition",
+                          selected ? "border-foreground/40 bg-muted/20" : "hover:bg-muted/10"
+                        )}
+                        onClick={() => setPlacement((p) => ({ ...p, color: c.hex }))}
+                      >
+                        <span
+                          className={cn("h-4 w-4 rounded-md border", selected ? "ring-2 ring-offset-1 ring-foreground/30" : "")}
+                          style={{ background: c.hex }}
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{c.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="text-xs text-muted-foreground">This color will be used for the learner’s name on the generated PDF.</div>
               </div>
 
               <div className="pt-2 flex items-center justify-between gap-2">
@@ -380,6 +536,7 @@ export function CertificatePlacementModal({
                       wPct: placement.wPct ?? 0.42,
                       hPct: placement.hPct ?? 0.08,
                       fontSize: placement.fontSize ?? 32,
+                      fontFamily: placement.fontFamily ?? "helvetica_bold",
                       color: placement.color ?? "#111111",
                       align: placement.align ?? "center",
                     });

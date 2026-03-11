@@ -1,9 +1,67 @@
 import { NextRequest, NextResponse } from "next/server";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { apiError, apiOk } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
 
 export const runtime = "nodejs";
+
+const PREVIEW_NAME = "Olivia Jane";
+
+type Placement = {
+  page: number;
+  xPct: number;
+  yPct: number;
+  wPct?: number;
+  hPct?: number;
+  fontSize?: number;
+  fontFamily?: "helvetica" | "helvetica_bold" | "times" | "times_bold" | "courier" | "courier_bold";
+  color?: string;
+  align?: "left" | "center" | "right";
+};
+
+function clamp01(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function parseHexColor(hex: string | undefined): { r: number; g: number; b: number } | null {
+  if (!hex) return null;
+  const s = hex.trim();
+  const m = /^#?([0-9a-f]{6})$/i.exec(s);
+  if (!m) return null;
+  const v = m[1];
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  return { r: r / 255, g: g / 255, b: b / 255 };
+}
+
+function pickStandardFontName(family: Placement["fontFamily"] | undefined): StandardFonts {
+  if (family === "helvetica") return StandardFonts.Helvetica;
+  if (family === "times") return StandardFonts.TimesRoman;
+  if (family === "times_bold") return StandardFonts.TimesRomanBold;
+  if (family === "courier") return StandardFonts.Courier;
+  if (family === "courier_bold") return StandardFonts.CourierBold;
+  return StandardFonts.HelveticaBold;
+}
+
+function fitFontSizeToWidth(args: {
+  font: { widthOfTextAtSize: (text: string, size: number) => number };
+  text: string;
+  desired: number;
+  maxWidth: number | null;
+}): number {
+  const desired = Math.max(6, Math.min(200, args.desired));
+  if (!args.maxWidth || args.maxWidth <= 0) return desired;
+  let s = desired;
+  for (let i = 0; i < 60; i++) {
+    const w = args.font.widthOfTextAtSize(args.text, s);
+    if (w <= args.maxWidth || s <= 6) break;
+    s = Math.max(6, s - 1);
+  }
+  return s;
+}
 
 function getExtFromMime(mime: string): string {
   if (mime === "application/pdf") return "pdf";
@@ -31,6 +89,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
 
   const url = new URL(request.url);
   const download = url.searchParams.get("download") === "1";
+  const preview = url.searchParams.get("preview") === "1";
 
   // Default behavior: return template metadata (used by course builder Step 4).
   if (!download) {
@@ -72,15 +131,93 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
-  const { data: tpl, error: tplError } = await admin
-    .from("course_certificate_templates")
-    .select("storage_bucket, storage_path")
-    .eq("course_id", id)
-    .maybeSingle();
+  const [{ data: tpl, error: tplError }, { data: settings, error: settingsError }] = await Promise.all([
+    admin
+      .from("course_certificate_templates")
+      .select("storage_bucket, storage_path, file_name, mime_type")
+      .eq("course_id", id)
+      .maybeSingle(),
+    preview
+      ? admin.from("course_certificate_settings").select("name_placement_json, certificate_title").eq("course_id", id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
 
   if (tplError) return apiError("INTERNAL", "Failed to load certificate template.", { status: 500 });
   if (!tpl?.storage_bucket || !tpl?.storage_path) {
     return apiError("NOT_FOUND", "Certificate template not found.", { status: 404 });
+  }
+
+  if (preview) {
+    if (settingsError) return apiError("INTERNAL", "Failed to load certificate settings.", { status: 500 });
+    const placementRaw = (settings as { name_placement_json?: unknown } | null)?.name_placement_json;
+    const placement = (placementRaw && typeof placementRaw === "object" ? (placementRaw as Placement) : null) as Placement | null;
+    if (!placement || !Number.isFinite(Number(placement.page))) {
+      return apiError("CONFLICT", "Certificate name placement is not configured yet.", { status: 409 });
+    }
+
+    // Download template bytes (no redirect): we render a PDF preview with the placement applied.
+    const { data: file, error: dlErr } = await admin.storage.from(tpl.storage_bucket).download(tpl.storage_path);
+    if (dlErr || !file) return apiError("INTERNAL", "Failed to download template.", { status: 500 });
+    const templateBytes = await file.arrayBuffer();
+
+    const mime = String((tpl as { mime_type?: unknown }).mime_type ?? "");
+    let pdfDoc: PDFDocument;
+
+    if (mime === "application/pdf") {
+      pdfDoc = await PDFDocument.load(templateBytes);
+    } else if (mime === "image/png" || mime === "image/jpeg") {
+      pdfDoc = await PDFDocument.create();
+      const embedded = mime === "image/png" ? await pdfDoc.embedPng(templateBytes) : await pdfDoc.embedJpg(templateBytes);
+      const { width, height } = embedded.scale(1);
+      const page = pdfDoc.addPage([width, height]);
+      page.drawImage(embedded, { x: 0, y: 0, width, height });
+    } else {
+      return apiError("VALIDATION_ERROR", "Unsupported template image type for preview. Please upload PDF, PNG, or JPG.", { status: 400 });
+    }
+
+    const pages = pdfDoc.getPages();
+    const pageIndex = Math.max(0, Math.min(pages.length - 1, Math.floor(Number(placement.page) - 1)));
+    const targetPage = pages[pageIndex];
+    const pageW = targetPage.getWidth();
+    const pageH = targetPage.getHeight();
+
+    const font = await pdfDoc.embedFont(pickStandardFontName(placement.fontFamily));
+    const desiredFontSize = Number.isFinite(Number(placement.fontSize)) ? Math.max(6, Math.min(200, Number(placement.fontSize))) : 32;
+    const maxTextWidth = placement.wPct !== undefined ? clamp01(Number(placement.wPct)) * pageW : null;
+    const fontSize = fitFontSizeToWidth({ font, text: PREVIEW_NAME, desired: desiredFontSize, maxWidth: maxTextWidth });
+
+    const align = placement.align === "left" || placement.align === "right" || placement.align === "center" ? placement.align : "center";
+    const color = parseHexColor(placement.color) ?? { r: 0.07, g: 0.07, b: 0.07 };
+
+    const xPct = clamp01(Number(placement.xPct));
+    const yPct = clamp01(Number(placement.yPct));
+
+    const textWidth = font.widthOfTextAtSize(PREVIEW_NAME, fontSize);
+    const xCenter = xPct * pageW;
+    const x = align === "center" ? xCenter - textWidth / 2 : align === "right" ? xCenter - textWidth : xCenter;
+
+    // placement.yPct is from TOP (as set in the UI). PDF origin is bottom-left.
+    const yFromTop = yPct * pageH;
+    const y = Math.max(0, pageH - yFromTop - fontSize / 2);
+
+    targetPage.drawText(PREVIEW_NAME, {
+      x: Math.max(0, Math.min(pageW - 1, x)),
+      y: Math.max(0, Math.min(pageH - 1, y)),
+      size: fontSize,
+      font,
+      color: rgb(color.r, color.g, color.b),
+    });
+
+    const outBytes = await pdfDoc.save();
+    const fileName = "certificate-preview.pdf";
+    return new NextResponse(Buffer.from(outBytes), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `inline; filename="${fileName}"`,
+        "Cache-Control": "no-store",
+      },
+    });
   }
 
   const { data: signed, error: signedError } = await admin.storage

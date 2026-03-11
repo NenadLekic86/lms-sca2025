@@ -15,6 +15,7 @@ const placementSchema = z
     wPct: z.number().min(0).max(1).optional(),
     hPct: z.number().min(0).max(1).optional(),
     fontSize: z.number().min(6).max(200).optional(),
+    fontFamily: z.enum(["helvetica", "helvetica_bold", "times", "times_bold", "courier", "courier_bold"]).optional(),
     color: z.string().optional(),
     align: z.enum(["left", "center", "right"]).optional(),
   })
@@ -22,7 +23,6 @@ const placementSchema = z
 
 const upsertSchema = z
   .object({
-    enabled: z.boolean().optional(),
     certificate_title: z.string().max(2000).optional(),
     course_passing_grade_percent: z.number().int().min(0).max(100).optional(),
     name_placement_json: placementSchema.nullable().optional(),
@@ -92,13 +92,29 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ id:
   }
 
   const payload = parsed.data;
+
+  const { data: existing, error: existingErr } = await admin
+    .from("course_certificate_settings")
+    .select("course_passing_grade_percent")
+    .eq("course_id", courseId)
+    .maybeSingle();
+  if (existingErr) return apiError("INTERNAL", "Failed to save certificate settings.", { status: 500 });
+
+  const effectiveThreshold =
+    typeof payload.course_passing_grade_percent === "number"
+      ? payload.course_passing_grade_percent
+      : existing && Number.isFinite(Number((existing as { course_passing_grade_percent?: unknown }).course_passing_grade_percent))
+        ? Number((existing as { course_passing_grade_percent: number }).course_passing_grade_percent)
+        : 0;
+
   const update: Record<string, unknown> = {
     course_id: courseId,
     organization_id: orgId,
     updated_at: new Date().toISOString(),
     updated_by: caller.id,
   };
-  if (typeof payload.enabled === "boolean") update.enabled = payload.enabled;
+  // "enabled" is implicit: certificates are considered enabled only when passing grade > 0.
+  update.enabled = effectiveThreshold > 0;
   if (typeof payload.certificate_title === "string") update.certificate_title = payload.certificate_title;
   if (typeof payload.course_passing_grade_percent === "number") update.course_passing_grade_percent = payload.course_passing_grade_percent;
   if (payload.name_placement_json !== undefined) update.name_placement_json = payload.name_placement_json;

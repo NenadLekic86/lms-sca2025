@@ -30,6 +30,7 @@ export function ProfileForm() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSendingReset, setIsSendingReset] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -39,6 +40,8 @@ export function ProfileForm() {
   const [originalFullName, setOriginalFullName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [organizationDisplay, setOrganizationDisplay] = useState<string | null>(null);
+  const [organizationName, setOrganizationName] = useState<string>("");
+  const [originalOrganizationName, setOriginalOrganizationName] = useState<string>("");
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [isRemovingAvatar, setIsRemovingAvatar] = useState(false);
   const [isDraggingAvatar, setIsDraggingAvatar] = useState(false);
@@ -73,7 +76,13 @@ export function ProfileForm() {
     return roleDisplayName(role);
   }, [organizationDisplay, role]);
 
-  const isDirty = useMemo(() => normalizeFullName(fullName) !== normalizeFullName(originalFullName), [fullName, originalFullName]);
+  const isDirty = useMemo(() => {
+    const nameDirty = normalizeFullName(fullName) !== normalizeFullName(originalFullName);
+    const orgDirty =
+      role === "organization_admin" &&
+      organizationName.trim().replace(/\s+/g, " ") !== originalOrganizationName.trim().replace(/\s+/g, " ");
+    return nameDirty || orgDirty;
+  }, [fullName, originalFullName, organizationName, originalOrganizationName, role]);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +108,9 @@ export function ProfileForm() {
           (typeof orgNameRaw === "string" && orgNameRaw.trim().length ? orgNameRaw.trim() : null) ??
           (typeof orgSlugRaw === "string" && orgSlugRaw.trim().length ? orgSlugRaw.trim() : null);
         setOrganizationDisplay(nextOrg);
+        const orgNameForEdit = typeof orgNameRaw === "string" ? orgNameRaw.trim() : "";
+        setOrganizationName(orgNameForEdit);
+        setOriginalOrganizationName(orgNameForEdit);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load profile");
       } finally {
@@ -142,18 +154,45 @@ export function ProfileForm() {
     const t = toast.loading("Saving profile…");
     try {
       const name = normalizeFullName(fullName);
-      const { data: body, message } = await fetchJson<MeResponse>("/api/me", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ full_name: name.length ? name : null }),
-      });
 
-      const saved = body.user?.full_name ?? "";
-      setFullName(saved);
-      setOriginalFullName(saved);
-      setAvatarUrl((body.user as { avatar_url?: string | null } | undefined)?.avatar_url ?? avatarUrl);
-      setSuccess(message || "Saved.");
-      toast.success(message || "Profile saved.", { id: t });
+      let profileMessage: string | null = null;
+      if (normalizeFullName(fullName) !== normalizeFullName(originalFullName)) {
+        const { data: body, message } = await fetchJson<MeResponse>("/api/me", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ full_name: name.length ? name : null }),
+        });
+
+        const saved = body.user?.full_name ?? "";
+        setFullName(saved);
+        setOriginalFullName(saved);
+        setAvatarUrl((body.user as { avatar_url?: string | null } | undefined)?.avatar_url ?? avatarUrl);
+        profileMessage = message || "Profile saved.";
+      }
+
+      if (
+        role === "organization_admin" &&
+        organizationName.trim().replace(/\s+/g, " ") !== originalOrganizationName.trim().replace(/\s+/g, " ")
+      ) {
+        const orgName = organizationName.trim().replace(/\s+/g, " ");
+        const { data: orgBody, message: orgMsg } = await fetchJson<{ organization: { id: string; name: string; slug: string | null } }>(
+          "/api/me/organization",
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: orgName }),
+          }
+        );
+        const nextName = orgBody.organization?.name ?? orgName;
+        setOrganizationName(nextName);
+        setOriginalOrganizationName(nextName);
+        setOrganizationDisplay(nextName);
+        profileMessage = orgMsg || profileMessage || "Saved.";
+      }
+
+      const finalMsg = profileMessage || "Saved.";
+      setSuccess(finalMsg);
+      toast.success(finalMsg, { id: t });
       setIsEditingInfo(false);
 
       // Let the rest of the app refresh user state + server components.
@@ -165,6 +204,25 @@ export function ProfileForm() {
       toast.error(msg, { id: t });
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleSendResetPassword() {
+    if (isSendingReset) return;
+    setError(null);
+    setSuccess(null);
+    setIsSendingReset(true);
+    const t = toast.loading("Sending reset password link…");
+    try {
+      const { message } = await fetchJson<{ ok: true }>("/api/me/password-reset", { method: "POST" });
+      toast.success(message || "Reset password link sent.", { id: t });
+      setSuccess(message || "Reset password link sent.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to send reset password link";
+      setError(msg);
+      toast.error(msg, { id: t });
+    } finally {
+      setIsSendingReset(false);
     }
   }
 
@@ -504,14 +562,24 @@ export function ProfileForm() {
               <h2 className="text-base font-semibold text-foreground">Personal information</h2>
               <p className="text-sm text-muted-foreground">Update your name. Email and role are read-only.</p>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isLoading || isSaving}
-              onClick={() => setIsEditingInfo((v) => !v)}
-            >
-              {isEditingInfo ? "Close" : "Edit"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isLoading || isSaving || isUploadingAvatar || isRemovingAvatar || isSettingPreset || isSendingReset}
+                onClick={() => void handleSendResetPassword()}
+              >
+                {isSendingReset ? "Sending…" : "Reset Password"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isLoading || isSaving}
+                onClick={() => setIsEditingInfo((v) => !v)}
+              >
+                {isEditingInfo ? "Close" : "Edit"}
+              </Button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -528,11 +596,27 @@ export function ProfileForm() {
           {role === "organization_admin" ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Organization</Label>
-                <Input value={organizationDisplay ?? "—"} disabled />
+                <Label htmlFor="orgName">Organization name</Label>
+                {isEditingInfo ? (
+                  <Input
+                    id="orgName"
+                    value={organizationName}
+                    onChange={(e) => setOrganizationName(e.target.value)}
+                    placeholder="e.g. Acme Inc."
+                    disabled={isLoading || isSaving}
+                    className="border-primary/40 ring-1 ring-primary/15 focus-visible:ring-2 focus-visible:ring-primary/25 transition-shadow"
+                  />
+                ) : (
+                  <div className="rounded-md border bg-background px-3 py-2 text-sm text-foreground">
+                    {organizationDisplay ?? "—"}
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Only organization admins can rename their organization.
+                </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="fullName">Full Name (optional)</Label>
+                <Label htmlFor="fullName">Administrator&apos;s Full Name (optional)</Label>
                 {isEditingInfo ? (
                   <Input
                     id="fullName"
@@ -583,6 +667,7 @@ export function ProfileForm() {
                 disabled={isLoading || isSaving}
                 onClick={() => {
                   setFullName(originalFullName);
+                    setOrganizationName(originalOrganizationName);
                   setSuccess(null);
                   setError(null);
                   setIsEditingInfo(false);

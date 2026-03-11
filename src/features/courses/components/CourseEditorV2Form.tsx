@@ -46,6 +46,7 @@ import {
 import { RichTextEditorWithUploads } from "@/features/courses/components/v2/RichTextEditorWithUploads";
 import { QuizWizardModal } from "@/features/courses/components/v2/QuizWizardModal";
 import { CertificatePlacementModal, type CertificateNamePlacement } from "@/features/certificates/components/CertificatePlacementModal";
+import { coercePercentInt, sanitizePercentIntText } from "@/lib/percentInput";
 import {
   extractInlineUploadIdsFromHtml,
   finalizeInlineImagesInHtml,
@@ -260,10 +261,12 @@ const SECTION_META: Record<string, { icon: string; accent: string; headerFrom: s
 function DetailsSection({
   title,
   defaultOpen = true,
+  allowOverflow = false,
   children,
 }: {
   title: string;
   defaultOpen?: boolean;
+  allowOverflow?: boolean;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -273,7 +276,7 @@ function DetailsSection({
     <div
       style={{
         borderRadius: "16px",
-        overflow: "hidden",
+        overflow: allowOverflow ? "visible" : "hidden",
         boxShadow: "0 4px 24px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.04)",
         border: `1px solid ${meta.accent}22`,
         background: "#ffffff",
@@ -969,15 +972,19 @@ export function CourseEditorV2Form({
   const [certLoading, setCertLoading] = useState(false);
   const [certSaving, setCertSaving] = useState(false);
   const [certTemplate, setCertTemplate] = useState<CertificateTemplateRow | null>(null);
-  const [certEnabled, setCertEnabled] = useState(false);
   const [certTitle, setCertTitle] = useState("");
   const [certPassingPercent, setCertPassingPercent] = useState<number>(0);
+  const [certPassingPercentInput, setCertPassingPercentInput] = useState<string>("0");
   const [certPlacement, setCertPlacement] = useState<CertificateNamePlacement | null>(null);
   const [certPlacementOpen, setCertPlacementOpen] = useState(false);
   const [certTplFile, setCertTplFile] = useState<File | null>(null);
+  const [certTplPreviewUrl, setCertTplPreviewUrl] = useState<string | null>(null);
   const [certTplUploading, setCertTplUploading] = useState(false);
   const [isCertTplDragActive, setIsCertTplDragActive] = useState(false);
   const certTplInputRef = useRef<HTMLInputElement | null>(null);
+  const certAutoSaveTimerRef = useRef<number | null>(null);
+  const certAutoClearTimerRef = useRef<number | null>(null);
+  const [certAutoStatus, setCertAutoStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   const [topics, setTopics] = useState<CourseTopic[]>(initialTopics ?? []);
   const [expandedTopicIds, setExpandedTopicIds] = useState<Set<string>>(new Set());
@@ -1233,7 +1240,52 @@ export function CourseEditorV2Form({
     });
   }, [memberAccessById, memberDefaultAccess]);
 
-  const hasUnsavedChanges = currentSignature !== savedSignatureRef.current;
+  const certStateSignature = useCallback((input: {
+    title: string;
+    passingPercent: number;
+    placement: CertificateNamePlacement | null;
+    template: CertificateTemplateRow | null;
+  }): string => {
+    return JSON.stringify({
+      title: String(input.title ?? ""),
+      passingPercent: Number.isFinite(Number(input.passingPercent)) ? Number(input.passingPercent) : 0,
+      placement: input.placement ?? null,
+      template: input.template
+        ? {
+            id: input.template.id,
+            storage_bucket: input.template.storage_bucket,
+            storage_path: input.template.storage_path,
+            file_name: input.template.file_name,
+            mime_type: input.template.mime_type,
+            size_bytes: input.template.size_bytes,
+          }
+        : null,
+    });
+  }, []);
+
+  const certSignature = useMemo(() => {
+    return certStateSignature({
+      title: certTitle,
+      passingPercent: certPassingPercent,
+      placement: certPlacement,
+      template: certTemplate,
+    });
+  }, [certPassingPercent, certPlacement, certStateSignature, certTemplate, certTitle]);
+
+  const savedCertSignatureRef = useRef<string>(certSignature);
+  const savedCertSnapshotRef = useRef<{
+    title: string;
+    passingPercent: number;
+    placement: CertificateNamePlacement | null;
+    template: CertificateTemplateRow | null;
+  }>({
+    title: certTitle,
+    passingPercent: certPassingPercent,
+    placement: certPlacement,
+    template: certTemplate,
+  });
+
+  const hasUnsavedChanges = currentSignature !== savedSignatureRef.current || certSignature !== savedCertSignatureRef.current || certTplUploading;
 
   // Autosave: every 5 minutes, persist the same pipeline as Save (silent).
   const autosaveCallbackRef = useRef<(() => void) | null>(null);
@@ -1276,11 +1328,30 @@ export function CourseEditorV2Form({
       );
       const settings = body.settings ?? null;
       const tpl = body.template ?? null;
+      const nextTitle = String(settings?.certificate_title ?? "");
+      const nextPassing = Number.isFinite(Number(settings?.course_passing_grade_percent)) ? Number(settings?.course_passing_grade_percent) : 0;
+      const nextPlacement = (settings?.name_placement_json as CertificateNamePlacement | null) ?? null;
+
+      // Keep leave-guard baseline aligned with the last persisted certificate state.
+      savedCertSnapshotRef.current = {
+        title: nextTitle,
+        passingPercent: nextPassing,
+        placement: nextPlacement,
+        template: tpl,
+      };
+      savedCertSignatureRef.current = certStateSignature({
+        title: nextTitle,
+        passingPercent: nextPassing,
+        placement: nextPlacement,
+        template: tpl,
+      });
+      setCertAutoStatus("idle");
+
       setCertTemplate(tpl);
-      setCertEnabled(Boolean(settings?.enabled ?? false));
-      setCertTitle(String(settings?.certificate_title ?? ""));
-      setCertPassingPercent(Number.isFinite(Number(settings?.course_passing_grade_percent)) ? Number(settings?.course_passing_grade_percent) : 0);
-      setCertPlacement((settings?.name_placement_json as CertificateNamePlacement | null) ?? null);
+      setCertTitle(nextTitle);
+      setCertPassingPercent(nextPassing);
+      setCertPassingPercentInput(String(nextPassing));
+      setCertPlacement(nextPlacement);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load certificate settings.");
     } finally {
@@ -1288,11 +1359,10 @@ export function CourseEditorV2Form({
     }
   }
 
-  async function saveCertificateSettings(courseIdToUse: string, next: Partial<CertificateSettingsRow>) {
+  async function saveCertificateSettings(courseIdToUse: string, next: Partial<CertificateSettingsRow>, opts?: { silent?: boolean }) {
     setCertSaving(true);
     try {
       const payload: Record<string, unknown> = {};
-      if (typeof next.enabled === "boolean") payload.enabled = next.enabled;
       if (typeof next.certificate_title === "string") payload.certificate_title = next.certificate_title;
       if (typeof next.course_passing_grade_percent === "number") payload.course_passing_grade_percent = next.course_passing_grade_percent;
       if ("name_placement_json" in next) payload.name_placement_json = next.name_placement_json ?? null;
@@ -1304,17 +1374,44 @@ export function CourseEditorV2Form({
       });
 
       const s = body.settings;
-      setCertEnabled(Boolean(s.enabled));
-      setCertTitle(String(s.certificate_title ?? ""));
-      setCertPassingPercent(Number.isFinite(Number(s.course_passing_grade_percent)) ? Number(s.course_passing_grade_percent) : 0);
-      setCertPlacement((s.name_placement_json as CertificateNamePlacement | null) ?? null);
-      toast.success("Certificate settings saved.");
+      const nextTitle = String(s.certificate_title ?? "");
+      const nextPassing = Number.isFinite(Number(s.course_passing_grade_percent)) ? Number(s.course_passing_grade_percent) : 0;
+      const nextPlacement = (s.name_placement_json as CertificateNamePlacement | null) ?? null;
+
+      setCertTitle(nextTitle);
+      setCertPassingPercent(nextPassing);
+      setCertPassingPercentInput(String(nextPassing));
+      setCertPlacement(nextPlacement);
+
+      // Update certificate baseline (so leave-guard matches the persisted state).
+      savedCertSnapshotRef.current = {
+        title: nextTitle,
+        passingPercent: nextPassing,
+        placement: nextPlacement,
+        template: certTemplate,
+      };
+      savedCertSignatureRef.current = certStateSignature({
+        title: nextTitle,
+        passingPercent: nextPassing,
+        placement: nextPlacement,
+        template: certTemplate,
+      });
+
+      if (!(opts?.silent ?? false)) {
+        toast.success("Certificate settings saved.");
+      }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save certificate settings.");
+      if (!(opts?.silent ?? false)) {
+        toast.error(e instanceof Error ? e.message : "Failed to save certificate settings.");
+      }
+      throw e;
     } finally {
       setCertSaving(false);
     }
   }
+
+  const saveCertificateSettingsRef = useRef(saveCertificateSettings);
+  saveCertificateSettingsRef.current = saveCertificateSettings;
 
   async function uploadCertificateTemplate(courseIdToUse: string, file: File) {
     setCertTplUploading(true);
@@ -1323,6 +1420,7 @@ export function CourseEditorV2Form({
       form.append("file", file);
       await fetchJson<Record<string, unknown>>(`/api/courses/${courseIdToUse}/certificate-template`, { method: "POST", body: form });
       setCertTplFile(null);
+      setCertTplPreviewUrl(null);
       await loadCertificateSettingsAndTemplate(courseIdToUse);
       toast.success("Certificate template uploaded.");
     } catch (e) {
@@ -1331,6 +1429,39 @@ export function CourseEditorV2Form({
       setCertTplUploading(false);
       setIsCertTplDragActive(false);
     }
+  }
+
+  function applyCertificateTemplateFile(file: File | null) {
+    if (!file) return;
+    if (!courseId) {
+      toast.error("Create the course draft first to upload a certificate template.");
+      return;
+    }
+    const allowed = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"]);
+    if (!allowed.has(file.type)) {
+      toast.error("Invalid template type. Allowed: PDF, PNG, JPG, WebP.");
+      return;
+    }
+    const maxBytes = 10 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      toast.error("Template is too large. Max size is 10MB.");
+      return;
+    }
+
+    setCertTplFile(file);
+    if (file.type.startsWith("image/")) {
+      const u = URL.createObjectURL(file);
+      setCertTplPreviewUrl(u);
+    } else {
+      setCertTplPreviewUrl(null);
+    }
+    // Clear input so selecting the same file again re-triggers onChange.
+    try {
+      if (certTplInputRef.current) certTplInputRef.current.value = "";
+    } catch {
+      // ignore
+    }
+    void uploadCertificateTemplate(courseId, file);
   }
 
   async function deleteCertificateTemplate(courseIdToUse: string) {
@@ -1351,6 +1482,82 @@ export function CourseEditorV2Form({
     void loadCertificateSettingsAndTemplate(courseId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId]);
+
+  useEffect(() => {
+    if (!certTplPreviewUrl) return;
+    return () => {
+      try {
+        URL.revokeObjectURL(certTplPreviewUrl);
+      } catch {
+        // ignore
+      }
+    };
+  }, [certTplPreviewUrl]);
+
+  useEffect(() => {
+    if (!courseId) return;
+    if (certLoading) return;
+    if (isBusy) return;
+    if (certTplUploading) return;
+    if (certSaving) return;
+
+    const dirty = certSignature !== savedCertSignatureRef.current;
+    if (!dirty) {
+      if (certAutoSaveTimerRef.current) {
+        window.clearTimeout(certAutoSaveTimerRef.current);
+        certAutoSaveTimerRef.current = null;
+      }
+      // Preserve the "Saved" indicator until its own timer clears it.
+      if (certAutoStatus === "saving") setCertAutoStatus("idle");
+      return;
+    }
+
+    if (certAutoClearTimerRef.current) {
+      window.clearTimeout(certAutoClearTimerRef.current);
+      certAutoClearTimerRef.current = null;
+    }
+
+    if (certAutoSaveTimerRef.current) {
+      window.clearTimeout(certAutoSaveTimerRef.current);
+      certAutoSaveTimerRef.current = null;
+    }
+
+    setCertAutoStatus("saving");
+    certAutoSaveTimerRef.current = window.setTimeout(() => {
+      certAutoSaveTimerRef.current = null;
+      void (async () => {
+        try {
+          await saveCertificateSettingsRef.current(
+            courseId,
+            {
+              certificate_title: certTitle,
+              course_passing_grade_percent: certPassingPercent,
+              name_placement_json: certPlacement,
+            },
+            { silent: true }
+          );
+          setCertAutoStatus("saved");
+          certAutoClearTimerRef.current = window.setTimeout(() => {
+            certAutoClearTimerRef.current = null;
+            setCertAutoStatus("idle");
+          }, 2000);
+        } catch {
+          setCertAutoStatus("error");
+        }
+      })();
+    }, 650);
+  }, [
+    certAutoStatus,
+    certLoading,
+    certPassingPercent,
+    certPlacement,
+    certSaving,
+    certSignature,
+    certTitle,
+    certTplUploading,
+    courseId,
+    isBusy,
+  ]);
 
   useEffect(() => {
     function onBeforeUnload(e: BeforeUnloadEvent) {
@@ -1399,6 +1606,7 @@ export function CourseEditorV2Form({
 
   function discardAllChanges() {
     const snap = savedSnapshotRef.current;
+    const certSnap = savedCertSnapshotRef.current;
     for (const v of Object.values(pendingLessonUploadsByItemId ?? {})) {
       revokeInlineQueueObjectUrls(v?.inlineImages ?? {});
     }
@@ -1430,6 +1638,16 @@ export function CourseEditorV2Form({
     setPendingLessonUploadsByItemId({});
     setTopicModal(null);
     setItemModal(null);
+    setCertTitle(String(certSnap.title ?? ""));
+    setCertPassingPercent(Number.isFinite(Number(certSnap.passingPercent)) ? Number(certSnap.passingPercent) : 0);
+    setCertPassingPercentInput(
+      String(Number.isFinite(Number(certSnap.passingPercent)) ? Number(certSnap.passingPercent) : 0)
+    );
+    setCertPlacement(certSnap.placement ?? null);
+    setCertTemplate(certSnap.template ?? null);
+    setCertTplFile(null);
+    setCertTplPreviewUrl(null);
+    setCertAutoStatus("idle");
     setError(null);
   }
 
@@ -3456,7 +3674,7 @@ export function CourseEditorV2Form({
         </div>
       </DetailsSection> : null}
 
-      {activeMainTab === "information" ? <DetailsSection title="Course Settings">
+      {activeMainTab === "information" ? <DetailsSection title="Course Settings" allowOverflow>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="md:col-span-1 rounded-md border bg-muted/10 p-3">
             <div className="flex items-center gap-2 rounded-md bg-background border px-3 py-2 text-sm font-medium">
@@ -3880,19 +4098,21 @@ export function CourseEditorV2Form({
                       <div className="font-semibold text-foreground">Auto-grant certificates</div>
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      When enabled, learners receive a certificate automatically after they meet the course passing grade based on their best quiz attempts.
+                      Certificates are auto-granted only when the passing grade is greater than 0 and both a template + name placement are configured.
                     </div>
                   </div>
-                  <label className="inline-flex items-center gap-2 text-sm font-medium">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-primary"
-                      checked={certEnabled}
-                      onChange={(e) => setCertEnabled(e.target.checked)}
-                      disabled={certLoading || certSaving}
-                    />
-                    Enabled
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Status:</span>
+                    <span className="rounded-full border px-2 py-0.5 text-xs font-medium">
+                      {certPassingPercent <= 0
+                        ? "Disabled (Passing Grade = 0)"
+                        : !certTemplate
+                          ? "Needs template"
+                          : !certPlacement
+                            ? "Needs placement"
+                            : "Active"}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -3911,11 +4131,25 @@ export function CourseEditorV2Form({
                     <div>
                       <FieldLabel>Course Passing Grade (%)</FieldLabel>
                       <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={certPassingPercent}
-                        onChange={(e) => setCertPassingPercent(Math.max(0, Math.min(100, Number(e.target.value || 0))))}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={certPassingPercentInput}
+                        onChange={(e) => {
+                          const next = sanitizePercentIntText(e.target.value);
+                          setCertPassingPercentInput(next);
+                          setCertPassingPercent(coercePercentInt(next));
+                        }}
+                        onBlur={() => {
+                          if (!certPassingPercentInput.trim()) {
+                            setCertPassingPercentInput("0");
+                            setCertPassingPercent(0);
+                          } else {
+                            const next = sanitizePercentIntText(certPassingPercentInput);
+                            setCertPassingPercentInput(next || "0");
+                            setCertPassingPercent(coercePercentInt(next));
+                          }
+                        }}
                         placeholder="0"
                         disabled={certLoading || certSaving}
                       />
@@ -3924,36 +4158,16 @@ export function CourseEditorV2Form({
                       </FieldHint>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        onClick={() => {
-                          if (!courseId) return;
-                          void saveCertificateSettings(courseId, {
-                            enabled: certEnabled,
-                            certificate_title: certTitle,
-                            course_passing_grade_percent: certPassingPercent,
-                            name_placement_json: certPlacement,
-                          });
-                        }}
-                        disabled={!courseId || certLoading || certSaving}
-                        className="gap-2"
-                      >
-                        {certSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                        Save certificate settings
-                      </Button>
-
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => {
-                          if (!courseId) return;
-                          void loadCertificateSettingsAndTemplate(courseId);
-                        }}
-                        disabled={!courseId || certLoading || certSaving}
-                      >
-                        Refresh
-                      </Button>
+                    <div className="rounded-lg border bg-muted/10 px-3 py-2 text-xs text-muted-foreground flex items-center gap-2">
+                      {certAutoStatus === "saving" || certSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                      {certAutoStatus === "saved" ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : null}
+                      {certAutoStatus === "saving" || certSaving
+                        ? "Saving…"
+                        : certAutoStatus === "saved"
+                          ? "Saved"
+                          : certAutoStatus === "error"
+                            ? "Couldn’t save certificate settings. Check your connection."
+                            : "Changes save automatically."}
                     </div>
                   </div>
 
@@ -3973,17 +4187,43 @@ export function CourseEditorV2Form({
 
                       {certTemplate ? (
                         <div className="mt-3 grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-4">
-                          <div className="rounded-lg border overflow-hidden bg-muted/10">
-                            {certTemplate.mime_type.startsWith("image/") ? (
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => certTplInputRef.current?.click()}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                certTplInputRef.current?.click();
+                              }
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              setIsCertTplDragActive(true);
+                            }}
+                            onDragLeave={() => setIsCertTplDragActive(false)}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              setIsCertTplDragActive(false);
+                              const f = e.dataTransfer.files?.[0] ?? null;
+                              if (f) applyCertificateTemplateFile(f);
+                            }}
+                            className={cn(
+                              "rounded-lg border overflow-hidden bg-muted/10 cursor-pointer transition-colors",
+                              isCertTplDragActive ? "border-primary bg-primary/5" : null
+                            )}
+                            title="Click or drop a file to replace"
+                          >
+                            {certTplPreviewUrl || certTemplate.mime_type.startsWith("image/") ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 alt="Certificate template preview"
-                                src={`/api/courses/${courseId}/certificate-template?download=1`}
+                                src={certTplPreviewUrl ?? `/api/courses/${courseId}/certificate-template?download=1`}
                                 className="h-[140px] w-full object-cover"
                               />
                             ) : (
                               <div className="h-[140px] w-full flex items-center justify-center">
-                                <FileText className="h-10 w-10 text-muted-foreground" />
+                                {certTplUploading ? <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" /> : <FileText className="h-10 w-10 text-muted-foreground" />}
                               </div>
                             )}
                           </div>
@@ -3999,10 +4239,16 @@ export function CourseEditorV2Form({
                                 variant="outline"
                                 size="sm"
                                 className="gap-2"
-                                onClick={() => window.open(`/api/courses/${courseId}/certificate-template?download=1`, "_blank", "noopener,noreferrer")}
+                                onClick={() =>
+                                  window.open(
+                                    `/api/courses/${courseId}/certificate-template?download=1&preview=1`,
+                                    "_blank",
+                                    "noopener,noreferrer"
+                                  )
+                                }
                               >
                                 <Eye className="h-4 w-4" />
-                                Preview
+                                Preview certificate
                               </Button>
 
                               <Button
@@ -4057,7 +4303,7 @@ export function CourseEditorV2Form({
                             e.preventDefault();
                             setIsCertTplDragActive(false);
                             const f = e.dataTransfer.files?.[0] ?? null;
-                            if (f) setCertTplFile(f);
+                            if (f) applyCertificateTemplateFile(f);
                           }}
                           className={cn(
                             "mt-3 rounded-lg border border-dashed p-8 text-center cursor-pointer transition-colors",
@@ -4070,8 +4316,11 @@ export function CourseEditorV2Form({
                             <Upload className="h-4 w-4" />
                             Browse file
                           </div>
-                          {certTplFile ? (
-                            <div className="mt-3 text-xs text-muted-foreground">Selected: {certTplFile.name}</div>
+                          {certTplUploading && certTplFile ? (
+                            <div className="mt-3 text-xs text-muted-foreground flex items-center justify-center gap-2">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              Uploading {certTplFile.name}…
+                            </div>
                           ) : null}
                         </div>
                       )}
@@ -4081,24 +4330,8 @@ export function CourseEditorV2Form({
                         type="file"
                         accept="application/pdf,image/png,image/jpeg,image/webp"
                         className="hidden"
-                        onChange={(e) => setCertTplFile(e.target.files?.[0] ?? null)}
+                        onChange={(e) => applyCertificateTemplateFile(e.target.files?.[0] ?? null)}
                       />
-
-                      <div className="mt-3 flex items-center gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          disabled={!courseId || !certTplFile || certTplUploading}
-                          onClick={() => {
-                            if (!courseId || !certTplFile) return;
-                            void uploadCertificateTemplate(courseId, certTplFile);
-                          }}
-                          className="gap-2"
-                        >
-                          {certTplUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                          Upload template
-                        </Button>
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -4113,7 +4346,6 @@ export function CourseEditorV2Form({
                     onSave={(p) => {
                       setCertPlacementOpen(false);
                       setCertPlacement(p);
-                      void saveCertificateSettings(courseId, { name_placement_json: p });
                     }}
                   />
                 ) : null}
@@ -4665,7 +4897,8 @@ export function CourseEditorV2Form({
                 const title =
                   busyAction === "publish" ? "Publishing course…" : busyAction === "save_draft" ? "Saving draft…" : "Saving changes…";
 
-                const doneCount = steps.filter((s) => busyVisitedSteps.includes(s)).length;
+                const activeIdx = busyStep ? steps.indexOf(busyStep) : -1;
+                const doneCount = steps.filter((s, idx) => busyVisitedSteps.includes(s) || (activeIdx >= 0 && idx < activeIdx)).length;
                 const pct = steps.length ? Math.min(100, Math.max(0, Math.round((doneCount / steps.length) * 100))) : 0;
 
                 return (
@@ -4689,8 +4922,9 @@ export function CourseEditorV2Form({
 
                     <div className="mt-5 space-y-2">
                       {steps.map((s) => {
+                        const stepIdx = steps.indexOf(s);
                         const isActive = s === busyStep;
-                        const isDone = !isActive && busyVisitedSteps.includes(s);
+                        const isDone = !isActive && (busyVisitedSteps.includes(s) || (activeIdx >= 0 && stepIdx >= 0 && stepIdx < activeIdx));
                         return (
                           <div key={s} className="flex items-center gap-2 text-sm">
                             <div

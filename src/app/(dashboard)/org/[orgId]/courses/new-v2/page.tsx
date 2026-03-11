@@ -21,13 +21,16 @@ export default async function OrgCourseNewV2Page({ params }: { params: Promise<{
   if (!user.organization_id || user.organization_id !== orgId) redirect("/unauthorized");
 
   const admin = createAdminSupabaseClient();
-  const { data: membersData } = await admin
+  const { data: membersData, error: membersError } = await admin
     .from("users")
     .select("id, full_name, email")
     .eq("organization_id", orgId)
     .eq("role", "member")
-    .neq("is_active", false)
+    .or("is_active.is.null,is_active.eq.true")
     .order("full_name", { ascending: true });
+  if (membersError) {
+    throw new Error(`Failed to load members: ${membersError.message}`);
+  }
 
   const memberOptions = (Array.isArray(membersData) ? membersData : [])
     .map((m) => {
