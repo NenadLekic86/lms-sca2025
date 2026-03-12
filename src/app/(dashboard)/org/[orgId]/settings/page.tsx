@@ -29,6 +29,8 @@ export default async function SettingsPage({ params }: { params: Promise<{ orgId
   const orgSlug = (orgRow as { slug?: unknown } | null)?.slug;
   const orgLogoUrl = (orgRow as { logo_url?: unknown } | null)?.logo_url;
 
+  const orgNameForEdit = typeof orgName === "string" ? orgName.trim() : "";
+
   const orgLabel =
     typeof orgName === "string" && orgName.trim().length > 0
       ? orgName.trim()
@@ -40,6 +42,8 @@ export default async function SettingsPage({ params }: { params: Promise<{ orgId
     <OrgSettingsClient
       orgId={orgId}
       orgLabel={orgLabel}
+      initialOrgName={orgNameForEdit}
+      callerRole={user.role}
       initialLogoUrl={typeof orgLogoUrl === "string" && orgLogoUrl.trim().length > 0 ? orgLogoUrl : null}
     />
   );

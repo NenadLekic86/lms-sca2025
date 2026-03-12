@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
   const { user, error } = await getServerUser();
   if (error || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (user.role === "member") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (user.role === "system_admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const url = new URL(request.url);
 

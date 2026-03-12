@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Filter,
   Hash,
+  Pencil,
   Plus,
   Search,
   Users,
@@ -28,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { CreateOrganizationForm } from "./CreateOrganizationForm";
 import { HelpText, UnderlineDropdown } from "@/components/table-v2/controls";
 import { useBodyScrollLock, useEscClose, useMountedForAnimation, useOutsideClickClose } from "@/components/table-v2/hooks";
+import { fetchJson } from "@/lib/api";
 
 type StatusFilter = "all" | "active" | "inactive";
 type SortKey = "created_at" | "name" | "status" | "users_count";
@@ -72,7 +74,7 @@ export function OrganizationsTableV2({
   title?: string;
   subtitle?: string;
 }) {
-  const { organizations, countsErrors, isLoading, error, createOrganization, disableOrganization, enableOrganization } =
+  const { organizations, countsErrors, isLoading, error, createOrganization, disableOrganization, enableOrganization, refetch } =
     useOrganizations();
 
   // UI state
@@ -250,6 +252,22 @@ export function OrganizationsTableV2({
     }
   };
 
+  const handleRenameOrg = async (orgId: string, name: string) => {
+    const t = toast.loading("Updating organization name…");
+    try {
+      const { message } = await fetchJson<{ organization: { id: string; name: string } }>(`/api/organizations/${orgId}/name`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      toast.success(message || "Organization name updated.", { id: t });
+      await refetch();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update organization name", { id: t });
+      throw e;
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -269,7 +287,7 @@ export function OrganizationsTableV2({
               {sortedOrganizations.length.toLocaleString()} organization{sortedOrganizations.length === 1 ? "" : "s"}
             </span>
           </div>
-          <HelpText className="mt-2 border-1 border-muted-foreground/50 rounded-md p-2"><b>Tip:</b> Click any row to open the details drawer.</HelpText>
+          <HelpText className="mt-2 border border-muted-foreground/50 rounded-md p-2"><b>Tip:</b> Click any row to open the details drawer.</HelpText>
         </div>
         <Button className="shrink-0 flex items-center gap-2" onClick={() => setIsCreateOpen((v) => !v)}>
           <Plus className="h-4 w-4" />
@@ -567,6 +585,7 @@ export function OrganizationsTableV2({
           onClose={() => setDrawerOpen(false)}
           onEnable={() => void handleEnable(activeOrg.id)}
           onDisable={() => void handleDisable(activeOrg.id)}
+          onRename={(nextName) => handleRenameOrg(activeOrg.id, nextName)}
         />
       ) : null}
 
@@ -600,14 +619,23 @@ function OrganizationDetailsDrawer(props: {
   onClose: () => void;
   onEnable: () => void;
   onDisable: () => void;
+  onRename: (nextName: string) => Promise<void>;
 }) {
   const [entered, setEntered] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [isSavingName, setIsSavingName] = useState(false);
 
   // Mount hidden for 1 tick so "open" animates like "close".
   useEffect(() => {
     const t = window.setTimeout(() => setEntered(true), 0);
     return () => window.clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    const n = props.org.name && String(props.org.name).trim().length ? String(props.org.name).trim() : "";
+    setNameInput(n);
+  }, [props.org.id, props.org.name]);
 
   const show = props.open && entered;
   const status = getStatus(props.org);
@@ -658,7 +686,64 @@ function OrganizationDetailsDrawer(props: {
                   <Building2 className="h-5 w-5 text-primary" />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-lg font-semibold text-primary truncate">{name}</div>
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isEditingName ? (
+                      <Input
+                        value={nameInput}
+                        onChange={(e) => setNameInput(e.target.value)}
+                        disabled={props.busy || isSavingName}
+                        className="h-9"
+                        placeholder="Organization name"
+                      />
+                    ) : (
+                      <div className="text-lg font-semibold text-primary truncate">{name}</div>
+                    )}
+
+                    {isEditingName ? (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={props.busy || isSavingName || nameInput.trim().replace(/\s+/g, " ").length < 2}
+                          className="shrink-0"
+                          onClick={async () => {
+                            if (isSavingName) return;
+                            setIsSavingName(true);
+                            try {
+                              await props.onRename(nameInput.trim().replace(/\s+/g, " "));
+                              setIsEditingName(false);
+                            } finally {
+                              setIsSavingName(false);
+                            }
+                          }}
+                        >
+                          {isSavingName ? "Saving…" : "Save"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={props.busy || isSavingName}
+                          className="shrink-0"
+                          onClick={() => {
+                            setIsEditingName(false);
+                            const n = props.org.name && String(props.org.name).trim().length ? String(props.org.name).trim() : "";
+                            setNameInput(n);
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-md border bg-background hover:bg-muted/40"
+                        aria-label="Rename organization"
+                        onClick={() => setIsEditingName(true)}
+                      >
+                        <Pencil className="h-4 w-4 text-muted-foreground" />
+                      </button>
+                    )}
+                  </div>
                   <div className="text-xs text-muted-foreground font-mono truncate">{slug}</div>
                 </div>
               </div>

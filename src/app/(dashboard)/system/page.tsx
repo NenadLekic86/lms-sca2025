@@ -1,4 +1,4 @@
-import { LayoutDashboard, Building2, UserCog, BookOpen, Award, FileText } from "lucide-react";
+import { LayoutDashboard, Building2, UserCog, BookOpen, Award, FileText, Users } from "lucide-react";
 import Link from "next/link";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import type { LucideIcon } from "lucide-react";
@@ -76,54 +76,89 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
   if (error || !user) return null;
   if (!["super_admin", "system_admin"].includes(user.role)) return null;
 
+  const isSystemAdmin = user.role === "system_admin";
   const admin = createAdminSupabaseClient();
   const sp = (await props.searchParams) ?? {};
   const activityPage = Number(spGet(sp, "activity_page") ?? "1");
   const activityPageSize = 10;
   const safeActivityPage = Number.isFinite(activityPage) && activityPage > 0 ? Math.floor(activityPage) : 1;
 
-  const [orgsTotal, orgsInactive, orgAdmins, courses, certificates] = await Promise.all([
+  const [orgsTotal, orgsInactive, orgAdmins, systemAdmins, courses, certificates] = await Promise.all([
     safeCount(admin, "organizations"),
     safeCount(admin, "organizations", { column: "is_active", value: false }),
     safeCount(admin, "users", { column: "role", value: "organization_admin" }),
-    safeCount(admin, "courses"),
-    safeCount(admin, "certificates"),
+    safeCount(admin, "users", { column: "role", value: "system_admin" }),
+    isSystemAdmin ? Promise.resolve({ count: 0, error: null as string | null }) : safeCount(admin, "courses"),
+    isSystemAdmin ? Promise.resolve({ count: 0, error: null as string | null }) : safeCount(admin, "certificates"),
   ]);
 
   const activeOrgsCount = Math.max(0, orgsTotal.count - orgsInactive.count);
   const orgsCountError = orgsTotal.error || orgsInactive.error;
 
-  const stats: Stat[] = [
-    {
-      label: "Organizations (Active / Inactive)",
-      value: `${activeOrgsCount} / ${orgsInactive.count}`,
-      icon: Building2,
-      color: "bg-blue-500",
-      error: orgsCountError,
-    },
-    { label: "Org Admins", value: String(orgAdmins.count), icon: UserCog, color: "bg-indigo-500", error: orgAdmins.error },
-    { label: "Total Courses", value: String(courses.count), icon: BookOpen, color: "bg-purple-500", error: courses.error },
-    { label: "Certificates Issued", value: String(certificates.count), icon: Award, color: "bg-amber-500", error: certificates.error },
-  ];
+  const stats: Stat[] = isSystemAdmin
+    ? [
+        {
+          label: "Organizations (Active / Inactive)",
+          value: `${activeOrgsCount} / ${orgsInactive.count}`,
+          icon: Building2,
+          color: "bg-blue-500",
+          error: orgsCountError,
+        },
+        { label: "System Admins", value: String(systemAdmins.count), icon: Users, color: "bg-emerald-600", error: systemAdmins.error },
+        { label: "Org Admins", value: String(orgAdmins.count), icon: UserCog, color: "bg-indigo-500", error: orgAdmins.error },
+      ]
+    : [
+        {
+          label: "Organizations (Active / Inactive)",
+          value: `${activeOrgsCount} / ${orgsInactive.count}`,
+          icon: Building2,
+          color: "bg-blue-500",
+          error: orgsCountError,
+        },
+        { label: "Org Admins", value: String(orgAdmins.count), icon: UserCog, color: "bg-indigo-500", error: orgAdmins.error },
+        { label: "Total Courses", value: String(courses.count), icon: BookOpen, color: "bg-purple-500", error: courses.error },
+        { label: "Certificates Issued", value: String(certificates.count), icon: Award, color: "bg-amber-500", error: certificates.error },
+      ];
 
-  const { count: activityCountRaw, error: activityCountError } = await admin
-    .from("audit_logs")
-    .select("id", { count: "exact", head: true });
+  let activityTotalCount = 0;
+  let activityTotalPages = 1;
+  let activityCurrent = 1;
+  let activityFromIdx = 0;
+  let activityToIdx = activityPageSize - 1;
+  let activityCountError: { message: string } | null = null;
+  let auditError: { message: string } | null = null;
+  let auditRows: AuditLogRow[] = [];
 
-  const activityTotalCount = typeof activityCountRaw === "number" ? activityCountRaw : 0;
-  const activityTotalPages = activityTotalCount > 0 ? Math.max(1, Math.ceil(activityTotalCount / activityPageSize)) : 1;
-  const activityCurrent = activityCountError ? safeActivityPage : Math.min(Math.max(1, safeActivityPage), activityTotalPages);
+  if (!isSystemAdmin) {
+    const { count: activityCountRaw, error: activityCountErrorRaw } = await admin
+      .from("audit_logs")
+      .select("id", { count: "exact", head: true });
 
-  const activityFromIdx = (Math.max(1, activityCurrent) - 1) * activityPageSize;
-  const activityToIdx = activityFromIdx + activityPageSize - 1;
+    activityTotalCount = typeof activityCountRaw === "number" ? activityCountRaw : 0;
+    activityTotalPages = activityTotalCount > 0 ? Math.max(1, Math.ceil(activityTotalCount / activityPageSize)) : 1;
+    activityCurrent = activityCountErrorRaw ? safeActivityPage : Math.min(Math.max(1, safeActivityPage), activityTotalPages);
+    activityCountError = activityCountErrorRaw ? { message: activityCountErrorRaw.message } : null;
 
-  const { data: recentAudit, error: auditError } = await admin
-    .from("audit_logs")
-    .select("id, created_at, action, actor_email, actor_role, entity, entity_id, target_user_id, metadata")
-    .order("created_at", { ascending: false })
-    .range(activityFromIdx, activityToIdx);
+    activityFromIdx = (Math.max(1, activityCurrent) - 1) * activityPageSize;
+    activityToIdx = activityFromIdx + activityPageSize - 1;
 
-  const auditRows = (Array.isArray(recentAudit) ? recentAudit : []) as AuditLogRow[];
+    const { data: recentAudit, error: auditErrorRaw } = await admin
+      .from("audit_logs")
+      .select("id, created_at, action, actor_email, actor_role, entity, entity_id, target_user_id, metadata")
+      .order("created_at", { ascending: false })
+      .range(activityFromIdx, activityToIdx);
+    auditError = auditErrorRaw ? { message: auditErrorRaw.message } : null;
+    auditRows = (Array.isArray(recentAudit) ? recentAudit : []) as AuditLogRow[];
+  } else {
+    // For system_admin we show a filtered, non-paginated "recent activity" view.
+    const { data: recentAudit, error: auditErrorRaw } = await admin
+      .from("audit_logs")
+      .select("id, created_at, action, actor_email, actor_role, entity, entity_id, target_user_id, metadata")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    auditError = auditErrorRaw ? { message: auditErrorRaw.message } : null;
+    auditRows = (Array.isArray(recentAudit) ? recentAudit : []) as AuditLogRow[];
+  }
 
 
   const activityHref = (p: number) => {
@@ -146,6 +181,39 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
   const getMetaString = (m: Record<string, unknown> | null, key: string): string | null => {
     const val = m?.[key];
     return typeof val === "string" && val.trim().length > 0 ? val.trim() : null;
+  };
+
+  const systemAdminAllowedTargetRoles = new Set<string>(["system_admin", "organization_admin"]);
+  const isAllowedSystemAdminAuditRow = (row: AuditLogRow): boolean => {
+    const action = row.action ?? "";
+    const meta = asRecord(row.metadata);
+
+    // Organization lifecycle
+    if (action === "create_organization" || action === "enable_organization" || action === "disable_organization" || action === "update_organization_name") {
+      return true;
+    }
+
+    // User lifecycle (restricted to org-admins + system-admins)
+    if (action === "invite_user") {
+      const invitedRole = getMetaString(meta, "invited_role");
+      return !!invitedRole && systemAdminAllowedTargetRoles.has(invitedRole);
+    }
+    if (
+      action === "send_password_setup_link" ||
+      action === "enable_user" ||
+      action === "disable_user" ||
+      action === "operational_delete_user" ||
+      action === "assign_user_organization"
+    ) {
+      const targetRole = getMetaString(meta, "target_role");
+      return !!targetRole && systemAdminAllowedTargetRoles.has(targetRole);
+    }
+    if (action === "change_user_role") {
+      const nextRole = getMetaString(meta, "new_role") ?? getMetaString(meta, "target_role");
+      return !!nextRole && systemAdminAllowedTargetRoles.has(nextRole);
+    }
+
+    return false;
   };
 
   const orgLabelById = new Map<string, string>();
@@ -472,9 +540,12 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
   const certificatesByOrg: Record<string, number> = {};
 
   try {
-    const { data: usersData, error: usersError } = await admin
-      .from("users")
-      .select("organization_id, is_active");
+    let q = admin.from("users").select("organization_id, is_active");
+    if (isSystemAdmin) {
+      // system_admin must not see members, so counts are for org-admins only
+      q = q.eq("role", "organization_admin");
+    }
+    const { data: usersData, error: usersError } = await q;
     if (usersError) {
       usersCountsError = usersError.message;
     } else {
@@ -493,38 +564,42 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
     usersCountsError = e instanceof Error ? e.message : "Failed to load users";
   }
 
-  try {
-    const { data: coursesData, error: coursesError } = await admin
-      .from("courses")
-      .select("organization_id");
-    if (coursesError) {
-      coursesCountsError = coursesError.message;
-    } else {
-      for (const row of (Array.isArray(coursesData) ? coursesData : []) as Array<{ organization_id?: string | null }>) {
-        const orgId = row.organization_id;
-        if (!orgId) continue;
-        coursesByOrg[orgId] = (coursesByOrg[orgId] || 0) + 1;
+  if (!isSystemAdmin) {
+    try {
+      const { data: coursesData, error: coursesError } = await admin
+        .from("courses")
+        .select("organization_id");
+      if (coursesError) {
+        coursesCountsError = coursesError.message;
+      } else {
+        for (const row of (Array.isArray(coursesData) ? coursesData : []) as Array<{ organization_id?: string | null }>) {
+          const orgId = row.organization_id;
+          if (!orgId) continue;
+          coursesByOrg[orgId] = (coursesByOrg[orgId] || 0) + 1;
+        }
       }
+    } catch (e) {
+      coursesCountsError = e instanceof Error ? e.message : "Failed to load courses";
     }
-  } catch (e) {
-    coursesCountsError = e instanceof Error ? e.message : "Failed to load courses";
   }
 
-  try {
-    const { data: certData, error: certError } = await admin
-      .from("certificates")
-      .select("organization_id");
-    if (certError) {
-      certificatesCountsError = certError.message;
-    } else {
-      for (const row of (Array.isArray(certData) ? certData : []) as Array<{ organization_id?: string | null }>) {
-        const orgId = row.organization_id;
-        if (!orgId) continue;
-        certificatesByOrg[orgId] = (certificatesByOrg[orgId] || 0) + 1;
+  if (!isSystemAdmin) {
+    try {
+      const { data: certData, error: certError } = await admin
+        .from("certificates")
+        .select("organization_id");
+      if (certError) {
+        certificatesCountsError = certError.message;
+      } else {
+        for (const row of (Array.isArray(certData) ? certData : []) as Array<{ organization_id?: string | null }>) {
+          const orgId = row.organization_id;
+          if (!orgId) continue;
+          certificatesByOrg[orgId] = (certificatesByOrg[orgId] || 0) + 1;
+        }
       }
+    } catch (e) {
+      certificatesCountsError = e instanceof Error ? e.message : "Failed to load certificates";
     }
-  } catch (e) {
-    certificatesCountsError = e instanceof Error ? e.message : "Failed to load certificates";
   }
 
   const orgOverview = orgRows.map((o) => ({
@@ -535,6 +610,8 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
     courses_count: coursesByOrg[o.id] || 0,
     certificates_count: certificatesByOrg[o.id] || 0,
   }));
+
+  const visibleAuditRows = isSystemAdmin ? auditRows.filter(isAllowedSystemAdminAuditRow).slice(0, activityPageSize) : auditRows;
 
   return (
     <div className="space-y-6">
@@ -595,15 +672,16 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
 
           {usersCountsError ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              User counts not available: {usersCountsError}
+              {isSystemAdmin ? "Org admin counts not available: " : "User counts not available: "}
+              {usersCountsError}
             </div>
           ) : null}
-          {coursesCountsError ? (
+          {!isSystemAdmin && coursesCountsError ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               Courses counts not available: {coursesCountsError}
             </div>
           ) : null}
-          {certificatesCountsError ? (
+          {!isSystemAdmin && certificatesCountsError ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               Certificates counts not available: {certificatesCountsError}
             </div>
@@ -615,15 +693,21 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Organization</th>
-                    <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Courses</th>
-                    <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Users (A / D / T)</th>
-                    <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Certificates</th>
+                    {!isSystemAdmin ? (
+                      <>
+                        <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Courses</th>
+                        <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Users (A / D / T)</th>
+                        <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Certificates</th>
+                      </>
+                    ) : (
+                      <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Org Admins (A / D / T)</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {orgOverview.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                      <td colSpan={isSystemAdmin ? 2 : 4} className="px-4 py-8 text-center text-sm text-muted-foreground">
                         No organizations found.
                       </td>
                     </tr>
@@ -638,11 +722,19 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
                             <div className="text-xs text-muted-foreground font-mono">{o.slug ?? o.id}</div>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-right text-sm text-foreground tabular-nums">{o.courses_count}</td>
-                        <td className="px-4 py-3 text-right text-sm text-foreground tabular-nums whitespace-nowrap">
-                          {o.users_active} / {o.users_disabled} / {o.users_total}
-                        </td>
-                        <td className="px-4 py-3 text-right text-sm text-foreground tabular-nums">{o.certificates_count}</td>
+                        {!isSystemAdmin ? (
+                          <>
+                            <td className="px-4 py-3 text-right text-sm text-foreground tabular-nums">{o.courses_count}</td>
+                            <td className="px-4 py-3 text-right text-sm text-foreground tabular-nums whitespace-nowrap">
+                              {o.users_active} / {o.users_disabled} / {o.users_total}
+                            </td>
+                            <td className="px-4 py-3 text-right text-sm text-foreground tabular-nums">{o.certificates_count}</td>
+                          </>
+                        ) : (
+                          <td className="px-4 py-3 text-right text-sm text-foreground tabular-nums whitespace-nowrap">
+                            {o.users_active} / {o.users_disabled} / {o.users_total}
+                          </td>
+                        )}
                       </tr>
                     ))
                   )}
@@ -659,14 +751,14 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
           </h2>
           {auditError ? (
             <div className="text-sm text-destructive">Failed to load audit logs: {auditError.message}</div>
-          ) : auditRows.length === 0 ? (
+          ) : visibleAuditRows.length === 0 ? (
             <div className="text-muted-foreground text-center py-8">
               <p>No activity yet.</p>
             </div>
           ) : (
             <>
               <RecentActivityTableV2
-                items={auditRows.map((row): RecentActivityItemV2 => {
+                items={visibleAuditRows.map((row): RecentActivityItemV2 => {
                   const time = row.created_at ? new Date(row.created_at).toLocaleString() : "-";
                   const actor =
                     row.actor_email ? `${row.actor_email}${row.actor_role ? ` (${roleLabel(row.actor_role)})` : ""}` : "-";
@@ -678,67 +770,69 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
                 emptyTitle="No activity yet."
               />
 
-              <div className="mt-4 flex items-center justify-between gap-3 text-sm">
-                <div className="text-muted-foreground">
-                  {activityTotalCount > 0 ? (
-                    <span>
-                      Showing {activityFromIdx + 1}–{Math.min(activityFromIdx + auditRows.length, activityTotalCount)} of {activityTotalCount}
-                    </span>
-                  ) : (
-                    <span>Showing 0 results</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {(() => {
-                    const onlyOne = activityTotalPages <= 1;
-                    const prevDisabled = onlyOne || activityCurrent <= 1;
-                    const nextDisabled = onlyOne || activityCurrent >= activityTotalPages;
-                    const pager = buildPager(activityCurrent, activityTotalPages);
+              {!isSystemAdmin ? (
+                <div className="mt-4 flex items-center justify-between gap-3 text-sm">
+                  <div className="text-muted-foreground">
+                    {activityTotalCount > 0 ? (
+                      <span>
+                        Showing {activityFromIdx + 1}–{Math.min(activityFromIdx + visibleAuditRows.length, activityTotalCount)} of {activityTotalCount}
+                      </span>
+                    ) : (
+                      <span>Showing 0 results</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {(() => {
+                      const onlyOne = activityTotalPages <= 1;
+                      const prevDisabled = onlyOne || activityCurrent <= 1;
+                      const nextDisabled = onlyOne || activityCurrent >= activityTotalPages;
+                      const pager = buildPager(activityCurrent, activityTotalPages);
 
-                    return (
-                      <>
-                        {prevDisabled ? (
-                          <Button variant="outline" disabled>
-                            Prev
-                          </Button>
-                        ) : (
-                          <Button asChild variant="outline">
-                            <Link href={activityHref(activityCurrent - 1)}>Prev</Link>
-                          </Button>
-                        )}
-
-                        <div className="flex items-center gap-1">
-                          {pager.map((p, idx) =>
-                            p === "ellipsis" ? (
-                              <span key={`e-${idx}`} className="px-2 text-muted-foreground select-none">
-                                …
-                              </span>
-                            ) : p === activityCurrent ? (
-                              <Button key={p} disabled>
-                                {p}
-                              </Button>
-                            ) : (
-                              <Button key={p} asChild variant="outline">
-                                <Link href={activityHref(p)}>{p}</Link>
-                              </Button>
-                            )
+                      return (
+                        <>
+                          {prevDisabled ? (
+                            <Button variant="outline" disabled>
+                              Prev
+                            </Button>
+                          ) : (
+                            <Button asChild variant="outline">
+                              <Link href={activityHref(activityCurrent - 1)}>Prev</Link>
+                            </Button>
                           )}
-                        </div>
 
-                        {nextDisabled ? (
-                          <Button variant="outline" disabled>
-                            Next
-                          </Button>
-                        ) : (
-                          <Button asChild variant="outline">
-                            <Link href={activityHref(activityCurrent + 1)}>Next</Link>
-                          </Button>
-                        )}
-                      </>
-                    );
-                  })()}
+                          <div className="flex items-center gap-1">
+                            {pager.map((p, idx) =>
+                              p === "ellipsis" ? (
+                                <span key={`e-${idx}`} className="px-2 text-muted-foreground select-none">
+                                  …
+                                </span>
+                              ) : p === activityCurrent ? (
+                                <Button key={p} disabled>
+                                  {p}
+                                </Button>
+                              ) : (
+                                <Button key={p} asChild variant="outline">
+                                  <Link href={activityHref(p)}>{p}</Link>
+                                </Button>
+                              )
+                            )}
+                          </div>
+
+                          {nextDisabled ? (
+                            <Button variant="outline" disabled>
+                              Next
+                            </Button>
+                          ) : (
+                            <Button asChild variant="outline">
+                              <Link href={activityHref(activityCurrent + 1)}>Next</Link>
+                            </Button>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
-              </div>
+              ) : null}
             </>
           )}
         </div>

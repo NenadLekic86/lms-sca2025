@@ -54,8 +54,9 @@ export default async function SystemExportPage({
   if (error || !user) redirect("/");
   if (!["super_admin", "system_admin"].includes(user.role)) redirect("/unauthorized");
 
+  const isSystemAdmin = user.role === "system_admin";
   const admin = createAdminSupabaseClient();
-  const exportActions = ["export_users", "export_enrollments", "export_certificates", "export_courses", "export_organizations"];
+  const exportActions = isSystemAdmin ? ["export_organizations"] : ["export_users", "export_enrollments", "export_certificates", "export_courses", "export_organizations"];
 
   const exportsPageSize = 20;
   const exportsPageRaw = Number(spGet(sp, "exports_page") ?? "1");
@@ -123,7 +124,7 @@ export default async function SystemExportPage({
           <Download className="h-8 w-8 text-primary shrink-0" />
           <div>
             <h1 className="text-2xl font-bold text-foreground">Export Data</h1>
-            <p className="text-muted-foreground">Export system data in various formats</p>
+            <p className="text-muted-foreground">{isSystemAdmin ? "Export organization data" : "Export system data in various formats"}</p>
           </div>
         </div>
         <Button variant="outline" className="gap-2 shrink-0" disabled title="Coming soon">
@@ -134,33 +135,35 @@ export default async function SystemExportPage({
 
       {/* Export Options Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-card border rounded-lg p-6 shadow-sm">
-          <div className="flex items-start gap-4">
-            <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-              <Users className="h-6 w-6 text-primary" />
-            </div>
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-foreground">Users Export</h3>
-              <p className="text-sm text-muted-foreground mt-1">Export all user data including roles and organizations</p>
-              <div className="flex gap-2 mt-4">
-                <Button variant="outline" size="sm" className="gap-2" asChild>
-                  <a href="/api/exports/users" target="_blank" rel="noreferrer">
+        {!isSystemAdmin ? (
+          <div className="bg-card border rounded-lg p-6 shadow-sm">
+            <div className="flex items-start gap-4">
+              <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                <Users className="h-6 w-6 text-primary" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-foreground">Users Export</h3>
+                <p className="text-sm text-muted-foreground mt-1">Export all user data including roles and organizations</p>
+                <div className="flex gap-2 mt-4">
+                  <Button variant="outline" size="sm" className="gap-2" asChild>
+                    <a href="/api/exports/users" target="_blank" rel="noreferrer">
+                      <FileSpreadsheet className="h-4 w-4" />
+                      CSV
+                    </a>
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-2" disabled title="Coming soon">
                     <FileSpreadsheet className="h-4 w-4" />
-                    CSV
-                  </a>
-                </Button>
-                <Button variant="outline" size="sm" className="gap-2" disabled title="Coming soon">
-                  <FileSpreadsheet className="h-4 w-4" />
-                  Excel
-                </Button>
-                <Button variant="outline" size="sm" className="gap-2" disabled title="Coming soon">
-                  <FileText className="h-4 w-4" />
-                  JSON
-                </Button>
+                    Excel
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-2" disabled title="Coming soon">
+                    <FileText className="h-4 w-4" />
+                    JSON
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        ) : null}
 
         <div className="bg-card border rounded-lg p-6 shadow-sm">
           <div className="flex items-start gap-4">
@@ -190,6 +193,7 @@ export default async function SystemExportPage({
           </div>
         </div>
 
+        {!isSystemAdmin ? (
         <div className="bg-card border rounded-lg p-6 shadow-sm">
           <div className="flex items-start gap-4">
             <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
@@ -220,34 +224,37 @@ export default async function SystemExportPage({
             </div>
           </div>
         </div>
+        ) : null}
 
-        <div className="bg-card border rounded-lg p-6 shadow-sm">
-          <div className="flex items-start gap-4">
-            <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-              <Award className="h-6 w-6 text-primary" />
-            </div>
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-foreground">Certificates Export</h3>
-              <p className="text-sm text-muted-foreground mt-1">Export all issued certificates</p>
-              <div className="flex gap-2 mt-4">
-                <Button variant="outline" size="sm" className="gap-2" asChild>
-                  <a href="/api/exports/certificates" target="_blank" rel="noreferrer">
+        {!isSystemAdmin ? (
+          <div className="bg-card border rounded-lg p-6 shadow-sm">
+            <div className="flex items-start gap-4">
+              <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                <Award className="h-6 w-6 text-primary" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-foreground">Certificates Export</h3>
+                <p className="text-sm text-muted-foreground mt-1">Export all issued certificates</p>
+                <div className="flex gap-2 mt-4">
+                  <Button variant="outline" size="sm" className="gap-2" asChild>
+                    <a href="/api/exports/certificates" target="_blank" rel="noreferrer">
+                      <FileSpreadsheet className="h-4 w-4" />
+                      CSV
+                    </a>
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-2" disabled title="Coming soon">
                     <FileSpreadsheet className="h-4 w-4" />
-                    CSV
-                  </a>
-                </Button>
-                <Button variant="outline" size="sm" className="gap-2" disabled title="Coming soon">
-                  <FileSpreadsheet className="h-4 w-4" />
-                  Excel
-                </Button>
-                <Button variant="outline" size="sm" className="gap-2" disabled title="Coming soon">
-                  <FileText className="h-4 w-4" />
-                  PDF
-                </Button>
+                    Excel
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-2" disabled title="Coming soon">
+                    <FileText className="h-4 w-4" />
+                    PDF
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       {/* Recent Exports */}

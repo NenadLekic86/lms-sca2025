@@ -2,6 +2,7 @@ import { BarChart3, Users, BookOpen, Award, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
+import { redirect } from "next/navigation";
 import { RecentEnrollmentsTableV2, type RecentEnrollmentItemV2 } from "@/components/table-v2/RecentEnrollmentsTableV2";
 import { ReportFiltersClient } from "@/features/reporting/components/ReportFiltersClient";
 import {
@@ -52,8 +53,8 @@ export default async function SystemReportsPage({
 }) {
   const sp = (await searchParams) ?? {};
   const { user, error } = await getServerUser();
-  if (error || !user) return null;
-  if (!["super_admin", "system_admin"].includes(user.role)) return null;
+  if (error || !user) redirect("/");
+  if (user.role !== "super_admin") redirect("/unauthorized");
 
   const orgId = spGet(sp, "orgId") ?? "";
   const q = spGet(sp, "q") ?? "";

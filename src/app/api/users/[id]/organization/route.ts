@@ -9,7 +9,8 @@ import { logApiEvent } from "@/lib/audit/apiEvents";
  * Assign/reassign an org-scoped user (organization_admin or member) to an organization.
  *
  * Permissions:
- * - super_admin/system_admin: allowed
+ * - super_admin: allowed
+ * - system_admin: allowed ONLY for organization_admin (never member)
  * - organization_admin/member: forbidden
  */
 export async function PATCH(
@@ -163,6 +164,19 @@ export async function PATCH(
       return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
 
+    if (caller.role === "system_admin" && targetRole !== "organization_admin") {
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Forbidden",
+        internalMessage: "system_admin attempted to assign organization for a member",
+      });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+    }
+
     // Ensure org exists
     const { data: org, error: orgError } = await admin
       .from("organizations")
@@ -267,6 +281,7 @@ export async function PATCH(
         entity_id: userId,
         target_user_id: userId,
         metadata: {
+          target_role: targetRole,
           organization_id,
           organization_name: (org as { name?: unknown }).name ?? null,
           organization_slug: (org as { slug?: unknown }).slug ?? null,

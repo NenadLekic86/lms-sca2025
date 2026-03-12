@@ -1,5 +1,6 @@
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { CertificatesTableV2, type CertificateRowV2 } from "@/features/certificates";
+import { redirect } from "next/navigation";
 
 type OrganizationRow = { id: string; name?: string | null; slug?: string | null };
 type CourseRow = { id: string; title?: string | null };
@@ -17,8 +18,8 @@ type CertificateRow = {
 
 export default async function SystemCertificatesPage() {
   const { user, error } = await getServerUser();
-  if (error || !user) return null;
-  if (!["super_admin", "system_admin"].includes(user.role)) return null;
+  if (error || !user) redirect("/");
+  if (user.role !== "super_admin") redirect("/unauthorized");
 
   const admin = createAdminSupabaseClient();
 

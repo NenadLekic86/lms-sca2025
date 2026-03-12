@@ -39,6 +39,7 @@ export async function GET(request: NextRequest) {
   const { user, error } = await getServerUser();
   if (error || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (user.role === "member") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (user.role === "system_admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const url = new URL(request.url);
   const orgIdParam = url.searchParams.get("orgId");
@@ -83,6 +84,10 @@ export async function GET(request: NextRequest) {
 
   if (effectiveOrgId && effectiveOrgId.length > 0) {
     q = q.eq("organization_id", effectiveOrgId);
+  }
+  if (user.role === "organization_admin") {
+    // Org admins can export only their org members + org-admins (never system/super).
+    q = q.in("role", ["member", "organization_admin"]);
   }
 
   const { data, error: loadError } = await q;

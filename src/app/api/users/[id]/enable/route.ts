@@ -101,7 +101,21 @@ export async function PATCH(
       });
       return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
-    if (callerRole === "system_admin" || callerRole === "super_admin") {
+    if (callerRole === "system_admin") {
+      if (!(targetRole === "system_admin" || targetRole === "organization_admin")) {
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 403,
+          code: "FORBIDDEN",
+          publicMessage: "Forbidden",
+          internalMessage: "system_admin attempted to enable disallowed role",
+        });
+        return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+      }
+      // ok
+    } else if (callerRole === "super_admin") {
       // ok
     } else if (callerRole === "organization_admin") {
       if (targetRole !== "member") {

@@ -187,7 +187,10 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
       entity: "users",
       entity_id: targetUserId,
       target_user_id: targetUserId,
-      metadata: {},
+      metadata: {
+        target_role: targetRole,
+        organization_id: targetOrgId,
+      },
     });
   } catch {
     // ignore

@@ -40,8 +40,6 @@ export function ProfileForm() {
   const [originalFullName, setOriginalFullName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [organizationDisplay, setOrganizationDisplay] = useState<string | null>(null);
-  const [organizationName, setOrganizationName] = useState<string>("");
-  const [originalOrganizationName, setOriginalOrganizationName] = useState<string>("");
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [isRemovingAvatar, setIsRemovingAvatar] = useState(false);
   const [isDraggingAvatar, setIsDraggingAvatar] = useState(false);
@@ -78,11 +76,8 @@ export function ProfileForm() {
 
   const isDirty = useMemo(() => {
     const nameDirty = normalizeFullName(fullName) !== normalizeFullName(originalFullName);
-    const orgDirty =
-      role === "organization_admin" &&
-      organizationName.trim().replace(/\s+/g, " ") !== originalOrganizationName.trim().replace(/\s+/g, " ");
-    return nameDirty || orgDirty;
-  }, [fullName, originalFullName, organizationName, originalOrganizationName, role]);
+    return nameDirty;
+  }, [fullName, originalFullName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,9 +103,6 @@ export function ProfileForm() {
           (typeof orgNameRaw === "string" && orgNameRaw.trim().length ? orgNameRaw.trim() : null) ??
           (typeof orgSlugRaw === "string" && orgSlugRaw.trim().length ? orgSlugRaw.trim() : null);
         setOrganizationDisplay(nextOrg);
-        const orgNameForEdit = typeof orgNameRaw === "string" ? orgNameRaw.trim() : "";
-        setOrganizationName(orgNameForEdit);
-        setOriginalOrganizationName(orgNameForEdit);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load profile");
       } finally {
@@ -168,26 +160,6 @@ export function ProfileForm() {
         setOriginalFullName(saved);
         setAvatarUrl((body.user as { avatar_url?: string | null } | undefined)?.avatar_url ?? avatarUrl);
         profileMessage = message || "Profile saved.";
-      }
-
-      if (
-        role === "organization_admin" &&
-        organizationName.trim().replace(/\s+/g, " ") !== originalOrganizationName.trim().replace(/\s+/g, " ")
-      ) {
-        const orgName = organizationName.trim().replace(/\s+/g, " ");
-        const { data: orgBody, message: orgMsg } = await fetchJson<{ organization: { id: string; name: string; slug: string | null } }>(
-          "/api/me/organization",
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: orgName }),
-          }
-        );
-        const nextName = orgBody.organization?.name ?? orgName;
-        setOrganizationName(nextName);
-        setOriginalOrganizationName(nextName);
-        setOrganizationDisplay(nextName);
-        profileMessage = orgMsg || profileMessage || "Saved.";
       }
 
       const finalMsg = profileMessage || "Saved.";
@@ -597,22 +569,11 @@ export function ProfileForm() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="orgName">Organization name</Label>
-                {isEditingInfo ? (
-                  <Input
-                    id="orgName"
-                    value={organizationName}
-                    onChange={(e) => setOrganizationName(e.target.value)}
-                    placeholder="e.g. Acme Inc."
-                    disabled={isLoading || isSaving}
-                    className="border-primary/40 ring-1 ring-primary/15 focus-visible:ring-2 focus-visible:ring-primary/25 transition-shadow"
-                  />
-                ) : (
-                  <div className="rounded-md border bg-background px-3 py-2 text-sm text-foreground">
-                    {organizationDisplay ?? "—"}
-                  </div>
-                )}
+                <div className="rounded-md border bg-background px-3 py-2 text-sm text-foreground">
+                  {organizationDisplay ?? "—"}
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  Only organization admins can rename their organization.
+                  To rename your organization, go to Settings.
                 </p>
               </div>
               <div className="space-y-2">
@@ -667,7 +628,6 @@ export function ProfileForm() {
                 disabled={isLoading || isSaving}
                 onClick={() => {
                   setFullName(originalFullName);
-                    setOrganizationName(originalOrganizationName);
                   setSuccess(null);
                   setError(null);
                   setIsEditingInfo(false);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Settings } from "lucide-react";
+import { Pencil, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
@@ -10,10 +10,23 @@ import { fetchJson } from "@/lib/api";
 type Props = {
   orgId: string;
   orgLabel: string;
+  initialOrgName: string;
+  callerRole: string;
   initialLogoUrl: string | null;
 };
 
-export default function OrgSettingsClient({ orgId, orgLabel, initialLogoUrl }: Props) {
+function normalizeOrgName(input: string): string {
+  return input.trim().replace(/\s+/g, " ");
+}
+
+export default function OrgSettingsClient({ orgId, orgLabel, initialOrgName, callerRole, initialLogoUrl }: Props) {
+  const canRenameOrg = callerRole === "organization_admin";
+
+  const [orgName, setOrgName] = useState<string>(initialOrgName ?? "");
+  const [isEditingOrgName, setIsEditingOrgName] = useState(false);
+  const [orgNameInput, setOrgNameInput] = useState<string>(initialOrgName ?? "");
+  const [isSavingOrgName, setIsSavingOrgName] = useState(false);
+
   const [logoUrl, setLogoUrl] = useState<string>(initialLogoUrl ?? "");
   const [isUploading, setIsUploading] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
@@ -21,6 +34,36 @@ export default function OrgSettingsClient({ orgId, orgLabel, initialLogoUrl }: P
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  async function saveOrgName(nextName: string) {
+    const name = normalizeOrgName(nextName);
+    setError(null);
+    setSuccess(null);
+    setIsSavingOrgName(true);
+    const t = toast.loading("Updating organization name…");
+    try {
+      const { data: body, message } = await fetchJson<{ organization: { id: string; name: string; slug: string | null } }>(
+        "/api/me/organization",
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        }
+      );
+      const saved = body.organization?.name ?? name;
+      setOrgName(saved);
+      setOrgNameInput(saved);
+      setIsEditingOrgName(false);
+      setSuccess(message || "Organization name updated.");
+      toast.success(message || "Organization name updated.", { id: t });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to update organization name";
+      setError(msg);
+      toast.error(msg, { id: t });
+    } finally {
+      setIsSavingOrgName(false);
+    }
+  }
 
   async function uploadLogo(file: File) {
     setError(null);
@@ -111,6 +154,64 @@ export default function OrgSettingsClient({ orgId, orgLabel, initialLogoUrl }: P
         </div>
       )}
 
+      {canRenameOrg ? (
+        <div className="bg-card border rounded-lg p-6 shadow-sm">
+          <div className="space-y-3">
+            <div>
+              <Label>Organization name</Label>
+              <p className="text-sm text-muted-foreground mt-1">
+                This name is displayed to admins and members. It does not change the organization URL/slug.
+              </p>
+            </div>
+
+            {isEditingOrgName ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={orgNameInput}
+                  onChange={(e) => setOrgNameInput(e.target.value)}
+                  disabled={isSavingOrgName}
+                  className="h-10 w-full md:w-[420px] rounded-md border bg-background px-3 text-sm"
+                  placeholder="e.g. Acme Inc."
+                />
+                <Button
+                  type="button"
+                  disabled={isSavingOrgName || normalizeOrgName(orgNameInput).length < 2}
+                  onClick={() => void saveOrgName(orgNameInput)}
+                >
+                  {isSavingOrgName ? "Saving..." : "Save"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isSavingOrgName}
+                  onClick={() => {
+                    setIsEditingOrgName(false);
+                    setOrgNameInput(orgName);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="rounded-md border bg-background px-3 py-2 text-sm text-foreground min-w-0 truncate">
+                  {orgName?.trim().length ? orgName.trim() : orgLabel}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="gap-2"
+                  onClick={() => setIsEditingOrgName(true)}
+                >
+                  <Pencil className="h-4 w-4" />
+                  Rename
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+
       <div className="bg-card border rounded-lg p-6 shadow-sm">
         <div className="space-y-4">
           <div>
@@ -190,7 +291,7 @@ export default function OrgSettingsClient({ orgId, orgLabel, initialLogoUrl }: P
                 />
               ) : (
                 <div className="h-14 w-14 rounded-md border flex items-center justify-center text-xs text-muted-foreground bg-background text-center px-1">
-                  {orgLabel}
+                  {(orgName?.trim().length ? orgName.trim() : orgLabel)}
                 </div>
               )}
 

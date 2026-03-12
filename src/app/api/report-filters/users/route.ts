@@ -53,8 +53,11 @@ export async function GET(request: NextRequest) {
 
   if (orgId) query = query.eq("organization_id", orgId);
   if (caller.role === "system_admin") {
-    // Hardening: system_admin should not see super_admin user.
-    query = query.neq("role", "super_admin");
+    // system_admin can only see system_admin + organization_admin.
+    query = query.in("role", ["system_admin", "organization_admin"]);
+  } else if (caller.role === "organization_admin") {
+    // org admins can only see members + org-admins in their own org (never system/super).
+    query = query.in("role", ["member", "organization_admin"]);
   }
 
   if (q.length > 0) {

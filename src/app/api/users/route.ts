@@ -18,7 +18,7 @@ type RpcUserRow = {
 /**
  * GET /api/users
  * Returns users based on caller's role:
- * - super_admin/system_admin: all users (via get_all_users RPC)
+ * - super_admin/system_admin: all users (via get_all_users RPC, then filtered)
  * - organization_admin: org users only (via get_org_users RPC)
  * - member: not allowed
  */
@@ -48,6 +48,35 @@ export async function GET(request: NextRequest) {
       return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
 
+    // Org-admin path (best practice):
+    // - do NOT rely on get_org_users RPC (it may omit organization_id / other columns)
+    // - query public.users directly (service role) with strict org + role filters
+    if (caller.role === "organization_admin") {
+      const orgId = caller.organization_id ?? null;
+      if (!orgId) return apiError("VALIDATION_ERROR", "Missing organization.", { status: 400 });
+
+      const admin = createAdminSupabaseClient();
+      const { data, error: loadError } = await admin
+        .from("users")
+        .select("id, email, role, organization_id, is_active, full_name, avatar_url, onboarding_status, invited_at, activated_at, created_at")
+        .is("deleted_at", null)
+        .eq("organization_id", orgId)
+        .in("role", ["member", "organization_admin"])
+        .order("created_at", { ascending: false });
+
+      if (loadError) {
+        return apiError("INTERNAL", "Failed to fetch users.", { status: 500 });
+      }
+
+      return apiOk(
+        {
+          users: Array.isArray(data) ? data : [],
+          caller_role: caller.role,
+        },
+        { status: 200 }
+      );
+    }
+
     // 3. Call appropriate RPC based on role
     const supabase = await createServerSupabaseClient();
     
@@ -65,18 +94,24 @@ export async function GET(request: NextRequest) {
       return apiError("INTERNAL", "Failed to fetch users.", { status: 500 });
     }
 
-    // Optional server-side org filter (useful for /org/[orgId]/users even for super/system admins)
+    // Optional server-side org filter (useful for super_admin viewing a specific org)
     const users = Array.isArray(result.data) ? (result.data as RpcUserRow[]) : [];
     const filteredUsers =
-      requestedOrgId && (caller.role === 'super_admin' || caller.role === 'system_admin')
+      requestedOrgId && caller.role === 'super_admin'
         ? users.filter((u) => u.organization_id === requestedOrgId)
         : users;
 
-    // Security/UX hardening: system_admin must not see super_admin user at all.
-    const visibleToCaller =
-      caller.role === "system_admin"
-        ? filteredUsers.filter((u) => u.role !== "super_admin")
-        : filteredUsers;
+    // Visibility enforcement (server-side; UI must not be trusted).
+    // - system_admin: can see ONLY system_admin + organization_admin
+    // - organization_admin: (handled above)
+    // - super_admin: can see everything
+    const visibleToCaller = (() => {
+      if (caller.role === "system_admin") {
+        return filteredUsers.filter((u) => u.role === "system_admin" || u.role === "organization_admin");
+      }
+      // super_admin
+      return filteredUsers;
+    })();
 
     // Ensure is_active + full_name + onboarding_status are present in response (RPC may not include them)
     const ids = visibleToCaller

@@ -85,6 +85,20 @@ export async function PATCH(
 
     const { role: newRole } = validation.data;
 
+    // system_admin can only assign system_admin or organization_admin (never member).
+    if (caller.role === "system_admin" && newRole !== "system_admin" && newRole !== "organization_admin") {
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Forbidden",
+        internalMessage: "system_admin attempted to assign disallowed role",
+      });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+    }
+
     // 4. Load target user to check if they're super_admin
     // NOTE: use admin client to bypass RLS safely (route already enforces caller permissions).
     const admin = createAdminSupabaseClient();
@@ -115,6 +129,21 @@ export async function PATCH(
         code: "FORBIDDEN",
         publicMessage: "Forbidden",
         internalMessage: "attempted to change super_admin role",
+      });
+      return apiError("FORBIDDEN", "Forbidden", { status: 403 });
+    }
+
+    // system_admin is only allowed to manage system_admin + organization_admin accounts.
+    const targetRole = String((targetUser as { role?: unknown }).role ?? "");
+    if (caller.role === "system_admin" && targetRole !== "system_admin" && targetRole !== "organization_admin") {
+      await logApiEvent({
+        request,
+        caller,
+        outcome: "error",
+        status: 403,
+        code: "FORBIDDEN",
+        publicMessage: "Forbidden",
+        internalMessage: "system_admin attempted to change role of disallowed target",
       });
       return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }

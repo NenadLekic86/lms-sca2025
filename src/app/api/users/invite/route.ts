@@ -11,7 +11,7 @@ import { logApiEvent } from "@/lib/audit/apiEvents";
  * 
  * Permissions:
  * - super_admin: can invite system_admin / organization_admin / member (NEVER super_admin)
- * - system_admin: can invite ONLY organization_admin (NEVER super_admin)
+ * - system_admin: can invite system_admin / organization_admin (NEVER super_admin, NEVER member)
  * - organization_admin: can only invite members to their own org
  * - member: not allowed
  */
@@ -102,8 +102,8 @@ export async function POST(request: NextRequest) {
       finalOrgId = caller.organization_id;
     }
 
-    // System admins can invite ONLY organization_admin
-    if (caller.role === 'system_admin' && role !== 'organization_admin') {
+    // System admins can invite ONLY system_admin + organization_admin (never members).
+    if (caller.role === 'system_admin' && role !== 'organization_admin' && role !== "system_admin") {
       await logApiEvent({
         request,
         caller,
@@ -113,7 +113,12 @@ export async function POST(request: NextRequest) {
         publicMessage: "Forbidden",
         internalMessage: "system_admin attempted to invite disallowed role",
       });
-      return apiError("FORBIDDEN", "System admins can only invite organization admins.", { status: 403 });
+      return apiError("FORBIDDEN", "System admins can only invite system admins and organization admins.", { status: 403 });
+    }
+
+    // system_admin users are never org-scoped
+    if (role === "system_admin") {
+      finalOrgId = null;
     }
 
     // Super admins can invite system_admin / organization_admin / member (handled by the super_admin check above)

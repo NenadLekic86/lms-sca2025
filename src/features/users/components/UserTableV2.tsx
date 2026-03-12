@@ -209,7 +209,7 @@ function canSendSetupLink(callerRole: Role | null, targetRole: Role): boolean {
   if (!callerRole) return false;
   if (callerRole === "member") return false;
   if (callerRole === "super_admin") return true;
-  if (callerRole === "system_admin") return targetRole !== "super_admin";
+  if (callerRole === "system_admin") return targetRole === "system_admin" || targetRole === "organization_admin";
   if (callerRole === "organization_admin") return targetRole === "member" || targetRole === "organization_admin";
   return false;
 }
@@ -217,9 +217,9 @@ function canSendSetupLink(callerRole: Role | null, targetRole: Role): boolean {
 function canEditRole(callerRole: Role | null, targetRole: Role): boolean {
   if (!callerRole) return false;
   if (targetRole === "super_admin") return false;
+  if (callerRole === "system_admin") return targetRole === "system_admin" || targetRole === "organization_admin";
   return (
     callerRole === "super_admin" ||
-    callerRole === "system_admin" ||
     (callerRole === "organization_admin" && (targetRole === "member" || targetRole === "organization_admin"))
   );
 }
@@ -228,7 +228,8 @@ function canAssignOrg(callerRole: Role | null, targetRole: Role): boolean {
   if (!callerRole) return false;
   if (targetRole === "super_admin") return false;
   if (!(targetRole === "organization_admin" || targetRole === "member")) return false;
-  return callerRole === "super_admin" || callerRole === "system_admin";
+  if (callerRole === "system_admin") return targetRole === "organization_admin";
+  return callerRole === "super_admin";
 }
 
 function canDeleteUser(callerRole: Role | null, targetRole: Role): boolean {
@@ -237,13 +238,14 @@ function canDeleteUser(callerRole: Role | null, targetRole: Role): boolean {
   if (targetRole === "super_admin") return false;
   // Safety: org admins can delete members only (server enforces org match).
   if (callerRole === "organization_admin") return targetRole === "member";
-  return callerRole === "super_admin" || callerRole === "system_admin";
+  if (callerRole === "system_admin") return targetRole === "system_admin" || targetRole === "organization_admin";
+  return callerRole === "super_admin";
 }
 
 function allowedRoleOptions(callerRole: Role | null): Role[] {
   // UI-level guard; server enforces regardless.
   if (!callerRole) return ["member"];
-  if (callerRole === "system_admin") return ["system_admin", "organization_admin", "member"];
+  if (callerRole === "system_admin") return ["system_admin", "organization_admin"];
   if (callerRole === "super_admin") return ["system_admin", "organization_admin", "member"];
   if (callerRole === "organization_admin") return ["organization_admin", "member"];
   return ["member"];

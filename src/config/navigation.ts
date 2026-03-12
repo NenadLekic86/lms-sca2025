@@ -78,8 +78,6 @@ export const NAVIGATION: Record<Role, NavItem[]> = {
     { label: 'My Profile', href: '/system/profile', iconKey: "User" },
     { label: 'Organizations', href: '/system/organizations', iconKey: "Building2" },
     { label: 'All Users', href: '/system/users', iconKey: "Users" },
-    { label: 'Certificates', href: '/system/certificates', iconKey: "Award" },
-    { label: 'Reports', href: '/system/reports', iconKey: "BarChart3" },
     { label: 'Export Data', href: '/system/export', iconKey: "Download" },
   ],
 

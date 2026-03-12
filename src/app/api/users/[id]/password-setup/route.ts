@@ -22,7 +22,7 @@ function canSendPasswordSetupLink(
   if (targetRole === "super_admin") return { ok: false, reason: "Forbidden: cannot send setup link for super_admin" };
 
   if (callerRole === "system_admin") {
-    if (targetRole === "system_admin" || targetRole === "organization_admin" || targetRole === "member") return { ok: true as const };
+    if (targetRole === "system_admin" || targetRole === "organization_admin") return { ok: true as const };
     return { ok: false, reason: "Forbidden: invalid target role" };
   }
   if (callerRole === "organization_admin") {
