@@ -50,10 +50,9 @@ export default function SupportPage() {
           <section className="space-y-3">
             <h2 className="text-xl font-semibold text-foreground">Contact Support</h2>
             <p className="text-muted-foreground leading-relaxed">
-              {/* Replace with your actual support contact */}
               For technical issues or questions, please email us at:{" "}
-              <a href="mailto:support@example.com" className="text-primary hover:underline">
-                support@example.com
+              <a href="mailto:contact@smartconsulting-agency.com" className="text-primary hover:underline">
+                contact@smartconsulting-agency.com
               </a>
             </p>
           </section>

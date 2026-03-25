@@ -2,8 +2,18 @@ import { NextRequest } from "next/server";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { apiError, apiOk } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
+import { getActiveOrganizationMemberIds } from "@/lib/organizations/memberships";
 
 export const runtime = "nodejs";
+
+type FilterUserRow = {
+  id: string;
+  email?: string | null;
+  full_name?: string | null;
+  role?: string | null;
+  organization_id?: string | null;
+  is_active?: boolean | null;
+};
 
 function parseIntParam(v: string | null, fallback: number): number {
   const n = Number(v);
@@ -44,33 +54,64 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createAdminSupabaseClient();
-  let query = admin
-    .from("users")
-    .select("id, email, full_name, role, organization_id, is_active", { count: "exact" })
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false })
-    .range(from, to);
+  let data: FilterUserRow[] = [];
+  let count = 0;
+  let loadError: { message: string } | null = null;
 
-  if (orgId) query = query.eq("organization_id", orgId);
-  if (caller.role === "system_admin") {
-    // system_admin can only see system_admin + organization_admin.
-    query = query.in("role", ["system_admin", "organization_admin"]);
-  } else if (caller.role === "organization_admin") {
-    // org admins can only see members + org-admins in their own org (never system/super).
-    query = query.in("role", ["member", "organization_admin"]);
+  if (caller.role === "organization_admin") {
+    const membershipLookup = await getActiveOrganizationMemberIds(orgId!, ["member", "organization_admin"]);
+    if (membershipLookup.error) return apiError("INTERNAL", "Failed to load users.", { status: 500 });
+
+    if (membershipLookup.userIds.length === 0) {
+      data = [];
+      count = 0;
+    } else {
+      let query = admin
+        .from("users")
+        .select("id, email, full_name, role, organization_id, is_active", { count: "exact" })
+        .in("id", membershipLookup.userIds)
+        .is("deleted_at", null)
+        .in("role", ["member", "organization_admin"])
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (q.length > 0) {
+        const s = q.replace(/,+/g, " ").slice(0, 120);
+        query = query.or(`email.ilike.%${s}%,full_name.ilike.%${s}%`);
+      }
+
+      const result = await query;
+      data = (Array.isArray(result.data) ? result.data : []) as FilterUserRow[];
+      count = typeof result.count === "number" ? result.count : 0;
+      loadError = result.error ? { message: result.error.message } : null;
+    }
+  } else {
+    let query = admin
+      .from("users")
+      .select("id, email, full_name, role, organization_id, is_active", { count: "exact" })
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false })
+      .range(from, to);
+
+    if (orgId) query = query.eq("organization_id", orgId);
+    if (caller.role === "system_admin") {
+      query = query.in("role", ["system_admin", "organization_admin"]);
+    }
+
+    if (q.length > 0) {
+      const s = q.replace(/,+/g, " ").slice(0, 120);
+      query = query.or(`email.ilike.%${s}%,full_name.ilike.%${s}%`);
+    }
+
+    const result = await query;
+    data = (Array.isArray(result.data) ? result.data : []) as FilterUserRow[];
+    count = typeof result.count === "number" ? result.count : 0;
+    loadError = result.error ? { message: result.error.message } : null;
   }
 
-  if (q.length > 0) {
-    const s = q.replace(/,+/g, " ").slice(0, 120);
-    query = query.or(`email.ilike.%${s}%,full_name.ilike.%${s}%`);
-  }
-
-  const { data, error: loadError, count } = await query;
   if (loadError) return apiError("INTERNAL", "Failed to load users.", { status: 500 });
 
-  const users = Array.isArray(data)
-    ? (data as Array<{ id: string; email?: string | null; full_name?: string | null; role?: string | null; organization_id?: string | null; is_active?: boolean | null }>)
-    : [];
+  const users = Array.isArray(data) ? data : [];
 
   return apiOk(
     {
@@ -85,7 +126,7 @@ export async function GET(request: NextRequest) {
       })),
       page,
       page_size: pageSize,
-      total: typeof count === "number" ? count : 0,
+      total: count,
     },
     { status: 200 }
   );

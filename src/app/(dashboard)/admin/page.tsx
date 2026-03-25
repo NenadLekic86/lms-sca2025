@@ -585,13 +585,21 @@ async function AdminDashboardContent(props: { searchParams?: Promise<SearchParam
           <>
             <RecentActivityTableV2
               items={auditRows.map((row): RecentActivityItemV2 => {
-                const time = row.created_at ? new Date(row.created_at).toLocaleString() : "-";
                 const actor =
                   row.actor_email ? `${row.actor_email}${row.actor_role ? ` (${roleLabel(row.actor_role)})` : ""}` : "-";
                 const subject = getSubjectDisplay(row);
                 const title = row.action ?? "—";
                 const details = getDetails(row);
-                return { id: row.id, time, actor, subject, title, details, meta: row.metadata ?? null };
+                return {
+                  id: row.id,
+                  time: "—",
+                  timeIso: row.created_at ?? null,
+                  actor,
+                  subject,
+                  title,
+                  details,
+                  meta: row.metadata ?? null,
+                };
               })}
               emptyTitle="No recent activity yet."
               emptySubtitle="Once you start inviting users and changing settings, logs will show here."

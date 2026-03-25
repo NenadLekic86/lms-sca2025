@@ -5,11 +5,13 @@ import { ChevronRight, Clock, Download, Building2, User, ShieldCheck, FileText, 
 
 import { HelpText } from "@/components/table-v2/controls";
 import { useBodyScrollLock, useEscClose, useMountedForAnimation } from "@/components/table-v2/hooks";
+import LocalDateTime from "@/components/ui/LocalDateTime";
 import { asRecord, getMetaBoolean, getMetaNumber, getMetaString } from "@/lib/audit/exportHelpers";
 
 export type RecentExportItemV2 = {
   id: string;
   time: string;
+  timeIso?: string | null;
   what: string;
   who: string;
   organization?: string | null;
@@ -88,7 +90,9 @@ export function RecentExportsTableV2({
                       setDrawerOpen(true);
                     }}
                   >
-                    <td className="px-6 py-4 text-sm text-muted-foreground font-mono whitespace-nowrap">{it.time}</td>
+                    <td className="px-6 py-4 text-sm text-muted-foreground font-mono whitespace-nowrap">
+                      <LocalDateTime iso={it.timeIso} fallback={it.time} />
+                    </td>
                     <td className="px-6 py-4 text-sm text-foreground">{it.what}</td>
                     <td className="px-6 py-4 text-sm text-muted-foreground">{it.who}</td>
                     <td className="px-6 py-4 text-right">
@@ -127,7 +131,9 @@ export function RecentExportsTableV2({
                   <div className="mt-1 text-xs text-muted-foreground truncate">{it.who}</div>
                   <div className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
                     <Clock className="h-3.5 w-3.5" />
-                    <span className="font-mono whitespace-nowrap">{it.time}</span>
+                    <span className="font-mono whitespace-nowrap">
+                      <LocalDateTime iso={it.timeIso} fallback={it.time} />
+                    </span>
                   </div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -216,7 +222,9 @@ function RecentExportDetailsDrawer({
                   <Clock className="h-4 w-4" />
                   Time
                 </span>
-                <span className="text-foreground text-right">{item.time}</span>
+                <span className="text-foreground text-right">
+                  <LocalDateTime iso={item.timeIso} fallback={item.time} />
+                </span>
               </div>
               <div className="flex items-start justify-between gap-4">
                 <span className="inline-flex items-center gap-2 text-muted-foreground">

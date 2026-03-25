@@ -6,10 +6,12 @@ import { ChevronRight, Clock, FileText, User, X } from "lucide-react";
 import { Button } from "@/components/core/button";
 import { HelpText } from "@/components/table-v2/controls";
 import { useBodyScrollLock, useEscClose, useMountedForAnimation } from "@/components/table-v2/hooks";
+import LocalDateTime from "@/components/ui/LocalDateTime";
 
 export type RecentActivityItemV2 = {
   id: string;
   time: string;
+  timeIso?: string | null;
   actor: string;
   subject: string;
   title: string; // action/event name
@@ -71,7 +73,9 @@ export function RecentActivityTableV2({
                       setDrawerOpen(true);
                     }}
                   >
-                    <td className="px-4 py-3 text-xs text-muted-foreground font-mono whitespace-nowrap">{row.time}</td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground font-mono whitespace-nowrap">
+                      <LocalDateTime iso={row.timeIso} fallback={row.time} />
+                    </td>
                     <td className="px-4 py-3 text-sm text-muted-foreground">{row.actor}</td>
                     <td className="px-4 py-3 text-sm text-muted-foreground">{row.subject}</td>
                     <td className="px-4 py-3 text-right">
@@ -106,7 +110,9 @@ export function RecentActivityTableV2({
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-xs text-muted-foreground font-mono">{row.time}</div>
+                  <div className="text-xs text-muted-foreground font-mono">
+                    <LocalDateTime iso={row.timeIso} fallback={row.time} />
+                  </div>
                   <div className="mt-2 text-sm text-foreground font-medium truncate">{row.subject}</div>
                   <div className="mt-1 text-xs text-muted-foreground truncate">{row.actor}</div>
                 </div>
@@ -190,7 +196,9 @@ function RecentActivityDetailsDrawer({
                   <Clock className="h-4 w-4" />
                   Time
                 </span>
-                <span className="text-foreground text-right">{item.time}</span>
+                <span className="text-foreground text-right">
+                  <LocalDateTime iso={item.timeIso} fallback={item.time} />
+                </span>
               </div>
               <div className="flex items-start justify-between gap-4">
                 <span className="inline-flex items-center gap-2 text-muted-foreground">

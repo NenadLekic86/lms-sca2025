@@ -759,13 +759,21 @@ async function SystemDashboardContent(props: { searchParams?: Promise<SearchPara
             <>
               <RecentActivityTableV2
                 items={visibleAuditRows.map((row): RecentActivityItemV2 => {
-                  const time = row.created_at ? new Date(row.created_at).toLocaleString() : "-";
                   const actor =
                     row.actor_email ? `${row.actor_email}${row.actor_role ? ` (${roleLabel(row.actor_role)})` : ""}` : "-";
                   const subject = getSubjectDisplay(row);
                   const title = row.action ?? "—";
                   const details = getDetails(row);
-                  return { id: row.id, time, actor, subject, title, details, meta: row.metadata ?? null };
+                  return {
+                    id: row.id,
+                    time: "—",
+                    timeIso: row.created_at ?? null,
+                    actor,
+                    subject,
+                    title,
+                    details,
+                    meta: row.metadata ?? null,
+                  };
                 })}
                 emptyTitle="No activity yet."
               />

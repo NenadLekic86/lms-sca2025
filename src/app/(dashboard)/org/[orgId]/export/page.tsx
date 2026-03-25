@@ -221,11 +221,11 @@ export default async function OrgExportPage({
             <RecentExportsTableV2
               items={recentExports.map((r): RecentExportItemV2 => {
                 const who = r.actor_email ? `${r.actor_email}${r.actor_role ? ` (${roleLabel(r.actor_role)})` : ""}` : "—";
-                const when = r.created_at ? new Date(r.created_at).toLocaleString() : "—";
                 const what = exportLabel(r.action ?? null);
                 return {
                   id: r.id,
-                  time: when,
+                  time: "—",
+                  timeIso: r.created_at ?? null,
                   what,
                   who,
                   organization: null,

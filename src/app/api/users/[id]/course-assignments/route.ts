@@ -4,6 +4,7 @@ import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server"
 import { apiError, apiOk, readJsonBody } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
 import { computeAccessExpiresAt, type AccessDurationKey, isAccessDurationKey } from "@/lib/courseAssignments/access";
+import { hasActiveOrganizationMembership } from "@/lib/organizations/memberships";
 
 export const runtime = "nodejs";
 
@@ -85,11 +86,6 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     return apiError("NOT_FOUND", "User not found.", { status: 404 });
   }
 
-  if (target.user.organization_id !== caller.organization_id) {
-    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
-    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
-  }
-
   if (target.user.role !== "member") {
     await logApiEvent({
       request,
@@ -100,6 +96,24 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
       publicMessage: "Only members can have course assignments.",
     });
     return apiError("VALIDATION_ERROR", "Only members can have course assignments.", { status: 400 });
+  }
+
+  const membershipCheck = await hasActiveOrganizationMembership(userId, caller.organization_id, ["member"]);
+  if (membershipCheck.error) {
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to validate organization membership.",
+      internalMessage: membershipCheck.error,
+    });
+    return apiError("INTERNAL", "Failed to validate organization membership.", { status: 500 });
+  }
+  if (!membershipCheck.hasMembership) {
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
   const { data, error: assignmentsError } = await admin
@@ -200,10 +214,6 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ id:
     await logApiEvent({ request, caller, outcome: "error", status: 404, code: "NOT_FOUND", publicMessage: "User not found." });
     return apiError("NOT_FOUND", "User not found.", { status: 404 });
   }
-  if (target.user.organization_id !== caller.organization_id) {
-    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
-    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
-  }
   if (target.user.role !== "member") {
     await logApiEvent({
       request,
@@ -214,6 +224,24 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ id:
       publicMessage: "Only members can have course assignments.",
     });
     return apiError("VALIDATION_ERROR", "Only members can have course assignments.", { status: 400 });
+  }
+
+  const membershipCheck = await hasActiveOrganizationMembership(userId, caller.organization_id, ["member"]);
+  if (membershipCheck.error) {
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to validate organization membership.",
+      internalMessage: membershipCheck.error,
+    });
+    return apiError("INTERNAL", "Failed to validate organization membership.", { status: 500 });
+  }
+  if (!membershipCheck.hasMembership) {
+    await logApiEvent({ request, caller, outcome: "error", status: 403, code: "FORBIDDEN", publicMessage: "Forbidden" });
+    return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
   if (target.user.is_active === false && desiredCourseIds.length > 0) {
     await logApiEvent({

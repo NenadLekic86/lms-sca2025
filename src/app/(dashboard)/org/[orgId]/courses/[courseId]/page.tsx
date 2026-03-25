@@ -5,6 +5,7 @@ import { BarChart3, BookOpen, Check, Clock, Layers } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { hasActiveOrganizationMembership } from "@/lib/organizations/memberships";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 import { CourseEnrollActions } from "@/features/courses/components/CourseEnrollActions";
 import { CourseContentPreview, type CourseContentTopic } from "@/features/courses/components/v2/CourseContentPreview";
@@ -164,9 +165,16 @@ export default async function OrgCourseDetailPage({
     redirect(`/org/${orgSlug}/courses/${courseSlug}`);
   }
 
-  // Safety: org-scoped pages must match caller org (prevents guessing other org slugs).
-  if ((user.role === "organization_admin" || user.role === "member") && user.organization_id !== orgId) {
-    redirect("/unauthorized");
+  // Members can open courses from any org where they have an active membership.
+  if (user.role === "organization_admin" || user.role === "member") {
+    const { hasMembership } = await hasActiveOrganizationMembership(
+      user.id,
+      orgId,
+      user.role === "organization_admin" ? ["organization_admin"] : ["member"]
+    );
+    if (!hasMembership) {
+      redirect("/unauthorized");
+    }
   }
 
   // Org-only courses: enforce org-owned constraint on org pages.

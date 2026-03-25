@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { getUserOrganizationMemberships } from "@/lib/organizations/memberships";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 import { CertificatesTableV2, type CertificateRowV2 } from "@/features/certificates";
 
@@ -35,6 +36,11 @@ export default async function CertificatesPage({ params }: { params: Promise<{ o
   // Members should use /my-courses etc, but certificates route is "My Certificates" in nav.
   // Keep this page usable for members by filtering to their own certificates.
   const supabase = await createServerSupabaseClient();
+  const membershipResult =
+    user.role === "member"
+      ? await getUserOrganizationMemberships(user.id, { roles: ["member"], activeOnly: true })
+      : null;
+  const membershipOrgIds = membershipResult?.memberships.map((membership) => membership.organizationId) ?? [];
 
   const [{ data: orgRow }] = await Promise.all([
     supabase.from("organizations").select("id, name, slug").eq("id", orgId).single(),
@@ -44,12 +50,15 @@ export default async function CertificatesPage({ params }: { params: Promise<{ o
   let certQuery = supabase
     .from("certificates")
     .select("id, user_id, course_id, organization_id, issued_at, created_at, status, expires_at")
-    .eq("organization_id", orgId)
     .order("created_at", { ascending: false })
     .limit(200);
 
   if (user.role === "member") {
-    certQuery = certQuery.eq("user_id", user.id);
+    certQuery = certQuery
+      .eq("user_id", user.id)
+      .in("organization_id", membershipOrgIds.length > 0 ? membershipOrgIds : ["00000000-0000-0000-0000-000000000000"]);
+  } else {
+    certQuery = certQuery.eq("organization_id", orgId);
   }
 
   const { data: certData, error: certError } = await certQuery;
@@ -72,9 +81,18 @@ export default async function CertificatesPage({ params }: { params: Promise<{ o
     )
   );
 
-  const [{ data: coursesData }, { data: usersData }] = await Promise.all([
+  const orgIds = Array.from(
+    new Set(
+      certificates
+        .map((c) => c.organization_id)
+        .filter((v): v is string => typeof v === "string" && v.length > 0)
+    )
+  );
+
+  const [{ data: coursesData }, { data: usersData }, { data: orgsData }] = await Promise.all([
     courseIds.length > 0 ? admin.from("courses").select("id, title").in("id", courseIds) : Promise.resolve({ data: [] }),
     userIds.length > 0 ? admin.from("users").select("id, email, full_name").in("id", userIds) : Promise.resolve({ data: [] }),
+    orgIds.length > 0 ? admin.from("organizations").select("id, name, slug").in("id", orgIds) : Promise.resolve({ data: [] }),
   ]);
 
   const courseMap = new Map<string, CourseRow>();
@@ -82,6 +100,9 @@ export default async function CertificatesPage({ params }: { params: Promise<{ o
 
   const userMap = new Map<string, UserRow>();
   (Array.isArray(usersData) ? (usersData as UserRow[]) : []).forEach((u) => userMap.set(u.id, u));
+
+  const orgMap = new Map<string, OrgRow>();
+  (Array.isArray(orgsData) ? (orgsData as OrgRow[]) : []).forEach((row) => orgMap.set(row.id, row));
 
   const orgName = (orgRow as OrgRow | null)?.name ?? null;
   const orgSlug = (orgRow as OrgRow | null)?.slug ?? null;
@@ -108,6 +129,13 @@ export default async function CertificatesPage({ params }: { params: Promise<{ o
     const canDownload = typeof cert.id === "string" && cert.id.length > 0;
     const downloadHref = canDownload ? `/api/certificates/${cert.id}/download` : null;
 
+    const certificateOrg =
+      cert.organization_id && orgMap.has(cert.organization_id) ? orgMap.get(cert.organization_id) ?? null : null;
+    const certificateOrgLabel =
+      certificateOrg?.name?.trim() ||
+      certificateOrg?.slug?.trim() ||
+      orgLabel;
+
     return {
       id: cert.id,
       userLabel,
@@ -115,7 +143,7 @@ export default async function CertificatesPage({ params }: { params: Promise<{ o
       issuedLabel: issued ? new Date(issued).toLocaleDateString() : "—",
       statusLabel: status,
       expiresLabel: expires ? new Date(expires).toLocaleDateString() : null,
-      organizationLabel: orgLabel,
+      organizationLabel: certificateOrgLabel,
       canDownload,
       downloadHref,
       meta: cert,
@@ -132,7 +160,7 @@ export default async function CertificatesPage({ params }: { params: Promise<{ o
 
       <CertificatesTableV2
         title="Certificates"
-        subtitle={`Organization: ${orgLabel}`}
+        subtitle={user.role === "member" ? "All active organizations" : `Organization: ${orgLabel}`}
         rows={rows}
       />
     </div>

@@ -10,6 +10,9 @@ type PublicAppSettings = {
   id: string;
   app_name: string | null;
   logo_url: string | null;
+  top_logo_url: string | null;
+  top_logo_compact_url: string | null;
+  bottom_logo_url: string | null;
   theme: Record<string, string> | string | null;
   default_language: string | null;
   timezone: string | null;
@@ -51,7 +54,7 @@ export async function GET(request: Request) {
   const admin = createAdminSupabaseClient();
   const { data, error: settingsError } = await admin
     .from('public_app_settings')
-    .select('id, app_name, logo_url, theme, default_language, timezone, updated_at')
+    .select('id, app_name, logo_url, top_logo_url, top_logo_compact_url, bottom_logo_url, theme, default_language, timezone, updated_at')
     .single();
 
   if (settingsError) {
@@ -111,7 +114,7 @@ export async function PATCH(request: NextRequest) {
   // Load current row (single row) to do a safe update and for audit metadata
   const { data: current, error: currentError } = await admin
     .from('public_app_settings')
-    .select('id, app_name, logo_url, theme, default_language, timezone')
+    .select('id, app_name, logo_url, top_logo_url, top_logo_compact_url, bottom_logo_url, theme, default_language, timezone')
     .single();
 
   if (currentError || !current) {
@@ -147,6 +150,24 @@ export async function PATCH(request: NextRequest) {
     updatePayload.logo_url = trimmed.length > 0 ? trimmed : null;
   }
 
+  // Handle top_logo_url
+  if ('top_logo_url' in validatedData) {
+    const trimmed = validatedData.top_logo_url?.trim() || '';
+    updatePayload.top_logo_url = trimmed.length > 0 ? trimmed : null;
+  }
+
+  // Handle top_logo_compact_url
+  if ('top_logo_compact_url' in validatedData) {
+    const trimmed = validatedData.top_logo_compact_url?.trim() || '';
+    updatePayload.top_logo_compact_url = trimmed.length > 0 ? trimmed : null;
+  }
+
+  // Handle bottom_logo_url
+  if ('bottom_logo_url' in validatedData) {
+    const trimmed = validatedData.bottom_logo_url?.trim() || '';
+    updatePayload.bottom_logo_url = trimmed.length > 0 ? trimmed : null;
+  }
+
   // Handle default_language
   if ('default_language' in validatedData) {
     updatePayload.default_language = validatedData.default_language;
@@ -169,25 +190,34 @@ export async function PATCH(request: NextRequest) {
   const nextLogoUrl = 'logo_url' in updatePayload 
     ? updatePayload.logo_url 
     : currentSettings.logo_url;
+  const nextTopLogoUrl = 'top_logo_url' in updatePayload
+    ? updatePayload.top_logo_url
+    : currentSettings.top_logo_url;
+  const nextTopLogoCompactUrl = 'top_logo_compact_url' in updatePayload
+    ? updatePayload.top_logo_compact_url
+    : currentSettings.top_logo_compact_url;
+  const nextBottomLogoUrl = 'bottom_logo_url' in updatePayload
+    ? updatePayload.bottom_logo_url
+    : currentSettings.bottom_logo_url;
 
-  if (!nextAppName && !nextLogoUrl) {
+  if (!nextAppName && !nextLogoUrl && !nextTopLogoUrl && !nextTopLogoCompactUrl && !nextBottomLogoUrl) {
     await logApiEvent({
       request,
       caller,
       outcome: "error",
       status: 400,
       code: "VALIDATION_ERROR",
-      publicMessage: "You must provide at least app_name or logo_url.",
-      internalMessage: "branding invalid: app_name and logo_url both empty",
+      publicMessage: "You must provide at least one branding field.",
+      internalMessage: "branding invalid: app_name and all logo fields empty",
     });
-    return apiError("VALIDATION_ERROR", "You must provide at least app_name or logo_url.", { status: 400 });
+    return apiError("VALIDATION_ERROR", "You must provide at least one branding field.", { status: 400 });
   }
 
   const { data: updated, error: updateError } = await admin
     .from('public_app_settings')
     .update(updatePayload)
     .eq('id', settingsId)
-    .select('id, app_name, logo_url, theme, default_language, timezone, updated_at')
+    .select('id, app_name, logo_url, top_logo_url, top_logo_compact_url, bottom_logo_url, theme, default_language, timezone, updated_at')
     .single();
 
   if (updateError || !updated) {

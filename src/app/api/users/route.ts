@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from '@/lib/supabase/server';
 import { apiError, apiOk } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
+import { getActiveOrganizationMemberIds } from "@/lib/organizations/memberships";
 
 type RpcUserRow = {
   id: string;
@@ -56,11 +57,25 @@ export async function GET(request: NextRequest) {
       if (!orgId) return apiError("VALIDATION_ERROR", "Missing organization.", { status: 400 });
 
       const admin = createAdminSupabaseClient();
+      const membershipLookup = await getActiveOrganizationMemberIds(orgId, ["member", "organization_admin"]);
+      if (membershipLookup.error) {
+        return apiError("INTERNAL", "Failed to fetch users.", { status: 500 });
+      }
+      if (membershipLookup.userIds.length === 0) {
+        return apiOk(
+          {
+            users: [],
+            caller_role: caller.role,
+          },
+          { status: 200 }
+        );
+      }
+
       const { data, error: loadError } = await admin
         .from("users")
         .select("id, email, role, organization_id, is_active, full_name, avatar_url, onboarding_status, invited_at, activated_at, created_at")
         .is("deleted_at", null)
-        .eq("organization_id", orgId)
+        .in("id", membershipLookup.userIds)
         .in("role", ["member", "organization_admin"])
         .order("created_at", { ascending: false });
 

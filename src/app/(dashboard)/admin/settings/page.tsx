@@ -8,16 +8,28 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { THEME_CACHE_KEY } from "@/lib/theme/themeConstants";
 import { fetchJson } from "@/lib/api";
 
+type ManagedLogoSlot = "top" | "top-compact" | "bottom";
+
 type SettingsResponse = {
   settings: {
     id: string;
     app_name: string | null;
     logo_url: string | null;
+    top_logo_url: string | null;
+    top_logo_compact_url: string | null;
+    bottom_logo_url: string | null;
     theme: Record<string, string>;
     default_language: string | null;
     timezone: string | null;
     updated_at?: string | null;
   };
+};
+
+type LogoUploadResponse = {
+  slot: string;
+  target_field: string;
+  logo_url: string;
+  path: string;
 };
 
 function applyCssVars(theme: Record<string, string>) {
@@ -34,21 +46,158 @@ function cacheTheme(theme: Record<string, string>) {
   }
 }
 
+function LogoUploadField({
+  slot,
+  label,
+  description,
+  value,
+  appName,
+  isLoading,
+  isUploading,
+  isDragging,
+  inputRef,
+  onValueChange,
+  onRemove,
+  onPick,
+  onDrop,
+  onDragStateChange,
+}: {
+  slot: ManagedLogoSlot;
+  label: string;
+  description: string;
+  value: string;
+  appName: string;
+  isLoading: boolean;
+  isUploading: boolean;
+  isDragging: boolean;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onValueChange: (value: string) => void;
+  onRemove: () => void;
+  onPick: (slot: ManagedLogoSlot, file: File) => void;
+  onDrop: (slot: ManagedLogoSlot, event: React.DragEvent<HTMLDivElement>) => void;
+  onDragStateChange: (slot: ManagedLogoSlot | null) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={`${slot}-logo-url`}>{label}</Label>
+      <div className="mt-1 flex items-center gap-4">
+        <div
+          className={`relative flex min-h-20 w-full flex-1 items-center gap-4 rounded border border-dashed px-4 py-3 text-sm transition ${
+            isDragging ? "border-primary bg-primary/10" : "border-muted-foreground/30 bg-muted/40"
+          }`}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!isUploading && !isLoading) onDragStateChange(slot);
+          }}
+          onDragLeave={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onDragStateChange(null);
+          }}
+          onDrop={(event) => onDrop(slot, event)}
+          role="button"
+          tabIndex={0}
+          aria-label={`Drop ${label.toLowerCase()} image or click to upload`}
+          onClick={() => {
+            if (isUploading || isLoading) return;
+            inputRef.current?.click();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              if (isUploading || isLoading) return;
+              inputRef.current?.click();
+            }
+          }}
+        >
+          <div className="relative h-16 w-32 overflow-hidden rounded border bg-background text-sm text-muted-foreground flex items-center justify-center">
+            {value ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={value} alt={`${label} preview`} className="h-full w-full object-contain" />
+            ) : (
+              appName || "No Logo"
+            )}
+
+            {value ? (
+              <button
+                type="button"
+                className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/75"
+                title={`Remove ${label.toLowerCase()} (clears URL)`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRemove();
+                }}
+              >
+                <X size={14} />
+              </button>
+            ) : null}
+          </div>
+
+          <div className="flex-1 text-muted-foreground">
+            <p className="font-medium text-foreground">{label}</p>
+            <p className="text-xs">{description}</p>
+          </div>
+
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isLoading || isUploading}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              inputRef.current?.click();
+            }}
+          >
+            <Upload size={16} className="mr-2" />
+            {isUploading ? "Uploading..." : "Upload New"}
+          </Button>
+        </div>
+
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/png,image/webp,image/svg,image/svg+xml"
+          className="hidden"
+          disabled={isLoading || isUploading}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            onPick(slot, f);
+            e.currentTarget.value = "";
+          }}
+        />
+      </div>
+      <Input
+        id={`${slot}-logo-url`}
+        value={value}
+        onChange={(e) => onValueChange(e.target.value)}
+        placeholder="https://.../logo.png"
+        disabled={isLoading}
+      />
+    </div>
+  );
+}
+
 export default function SystemSettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
-  const [isDraggingLogo, setIsDraggingLogo] = useState(false);
+  const [uploadingSlot, setUploadingSlot] = useState<ManagedLogoSlot | null>(null);
+  const [draggingSlot, setDraggingSlot] = useState<ManagedLogoSlot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   const [appName, setAppName] = useState("");
-  const [logoUrl, setLogoUrl] = useState("");
+  const [topLogoUrl, setTopLogoUrl] = useState("");
+  const [topCompactLogoUrl, setTopCompactLogoUrl] = useState("");
+  const [bottomLogoUrl, setBottomLogoUrl] = useState("");
   const [defaultLanguage, setDefaultLanguage] = useState("en");
   const [timezone, setTimezone] = useState("UTC");
   const [themeText, setThemeText] = useState<string>("{}");
   const [themeJsonError, setThemeJsonError] = useState<string | null>(null);
-  const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const topLogoInputRef = useRef<HTMLInputElement | null>(null);
+  const topCompactLogoInputRef = useRef<HTMLInputElement | null>(null);
+  const bottomLogoInputRef = useRef<HTMLInputElement | null>(null);
 
   const parsedTheme = useMemo(() => {
     try {
@@ -80,7 +229,9 @@ export default function SystemSettingsPage() {
         if (cancelled) return;
 
         setAppName(data.settings.app_name ?? "");
-        setLogoUrl(data.settings.logo_url ?? "");
+        setTopLogoUrl(data.settings.top_logo_url ?? "");
+        setTopCompactLogoUrl(data.settings.top_logo_compact_url ?? "");
+        setBottomLogoUrl(data.settings.bottom_logo_url ?? data.settings.logo_url ?? "");
         setDefaultLanguage(data.settings.default_language ?? "en");
         setTimezone(data.settings.timezone ?? "UTC");
         setThemeText(JSON.stringify(data.settings.theme ?? {}, null, 2));
@@ -112,7 +263,9 @@ export default function SystemSettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           app_name: appName,
-          logo_url: logoUrl,
+          top_logo_url: topLogoUrl,
+          top_logo_compact_url: topCompactLogoUrl,
+          bottom_logo_url: bottomLogoUrl,
           default_language: defaultLanguage,
           timezone,
           theme: parsedTheme,
@@ -143,40 +296,58 @@ export default function SystemSettingsPage() {
     }
   }
 
-  async function handleLogoSelected(file: File) {
+  function setLogoValue(slot: ManagedLogoSlot, value: string) {
+    if (slot === "top") {
+      setTopLogoUrl(value);
+      return;
+    }
+    if (slot === "top-compact") {
+      setTopCompactLogoUrl(value);
+      return;
+    }
+    setBottomLogoUrl(value);
+  }
+
+  async function handleLogoSelected(slot: ManagedLogoSlot, file: File) {
     setError(null);
     setSuccess(null);
-    setIsUploadingLogo(true);
+    setUploadingSlot(slot);
 
     try {
       const form = new FormData();
       form.append("file", file);
 
-      const { data: body, message } = await fetchJson<{ logo_url: string; path: string }>("/api/settings/logo", {
+      const { data: body, message } = await fetchJson<LogoUploadResponse>(`/api/settings/logo?slot=${encodeURIComponent(slot)}`, {
         method: "POST",
         body: form,
       });
 
       if (body.logo_url) {
-        setLogoUrl(body.logo_url);
+        setLogoValue(slot, body.logo_url);
       }
 
       // Refresh sidebar branding immediately (no hard reload)
       window.dispatchEvent(new Event("branding:updated"));
 
-      setSuccess(message || "Logo uploaded.");
+      setSuccess(message || `${labelForSlot(slot)} uploaded.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to upload logo");
     } finally {
-      setIsUploadingLogo(false);
+      setUploadingSlot(null);
     }
   }
 
-  function handleLogoDrop(event: React.DragEvent<HTMLDivElement>) {
+  function labelForSlot(slot: ManagedLogoSlot) {
+    if (slot === "top") return "Big Logo";
+    if (slot === "top-compact") return "Small Logo";
+    return "Bottom Logo";
+  }
+
+  function handleLogoDrop(slot: ManagedLogoSlot, event: React.DragEvent<HTMLDivElement>) {
     event.preventDefault();
     event.stopPropagation();
-    setIsDraggingLogo(false);
-    if (isUploadingLogo || isLoading) return;
+    setDraggingSlot(null);
+    if (uploadingSlot || isLoading) return;
 
     const file = event.dataTransfer.files?.[0];
     if (!file) return;
@@ -184,7 +355,7 @@ export default function SystemSettingsPage() {
       setError("Please drop an image file.");
       return;
     }
-    void handleLogoSelected(file);
+    void handleLogoSelected(slot, file);
   }
 
   return (
@@ -216,7 +387,7 @@ export default function SystemSettingsPage() {
       )}
 
       {/* Settings Sections */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="space-y-6">
         {/* Branding */}
         <div className="bg-card border rounded-lg p-6 shadow-sm">
           <div className="flex items-center gap-2 mb-4">
@@ -234,107 +405,63 @@ export default function SystemSettingsPage() {
                 disabled={isLoading}
               />
             </div>
-            <div>
-              <Label htmlFor="logoUrl">Logo URL</Label>
-              <div className="mt-1 flex items-center gap-4">
-                <div
-                  className={`relative flex min-h-20 w-full flex-1 items-center gap-4 rounded border border-dashed px-4 py-3 text-sm transition ${
-                    isDraggingLogo ? "border-primary bg-primary/10" : "border-muted-foreground/30 bg-muted/40"
-                  }`}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if (!isUploadingLogo && !isLoading) setIsDraggingLogo(true);
-                  }}
-                  onDragLeave={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setIsDraggingLogo(false);
-                  }}
-                  onDrop={handleLogoDrop}
-                  role="button"
-                  tabIndex={0}
-                  aria-label="Drop logo image or click to upload"
-                  onClick={() => {
-                    if (isUploadingLogo || isLoading) return;
-                    logoInputRef.current?.click();
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      if (isUploadingLogo || isLoading) return;
-                      logoInputRef.current?.click();
-                    }
-                  }}
-                >
-                  <div className="relative h-16 w-32 bg-background rounded flex items-center justify-center text-muted-foreground text-sm overflow-hidden border">
-                    {logoUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={logoUrl} alt="Current logo" className="h-full w-full object-contain" />
-                    ) : (
-                      (appName ? appName : "No Logo")
-                    )}
-
-                    {logoUrl ? (
-                      <button
-                        type="button"
-                        className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/75"
-                        title="Remove logo (clears URL)"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setLogoUrl("");
-                          setSuccess("Logo removed (not saved). Click Save Changes to persist.");
-                        }}
-                      >
-                        <X size={14} />
-                      </button>
-                    ) : null}
-                  </div>
-
-                  <div className="flex-1 text-muted-foreground">
-                    <p className="font-medium text-foreground">Drag & drop a logo here</p>
-                    <p className="text-xs">PNG, WEBP, or SVG. Click to browse.</p>
-                  </div>
-
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={isLoading || isUploadingLogo}
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      logoInputRef.current?.click();
-                    }}
-                  >
-                    <Upload size={16} className="mr-2" />
-                    {isUploadingLogo ? "Uploading..." : "Upload New"}
-                  </Button>
-                </div>
-
-                <input
-                  ref={logoInputRef}
-                  type="file"
-                  accept="image/png,image/webp,image/svg,image/svg+xml"
-                  className="hidden"
-                  disabled={isLoading || isUploadingLogo}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (!f) return;
-                    void handleLogoSelected(f);
-                    // allow selecting the same file again
-                    e.currentTarget.value = "";
-                  }}
-                />
-              </div>
-              <Input
-                id="logoUrl"
-                value={logoUrl}
-                onChange={(e) => setLogoUrl(e.target.value)}
-                className="mt-2"
-                placeholder="https://.../logo.png"
-                disabled={isLoading}
-              />
-            </div>
+            <LogoUploadField
+              slot="top"
+              label="Big Logo"
+              description="Visible at the top of the sidebar when the sidebar is expanded."
+              value={topLogoUrl}
+              appName={appName}
+              isLoading={isLoading}
+              isUploading={uploadingSlot === "top"}
+              isDragging={draggingSlot === "top"}
+              inputRef={topLogoInputRef}
+              onValueChange={setTopLogoUrl}
+              onRemove={() => {
+                setTopLogoUrl("");
+                setSuccess("Big Logo removed (not saved). Click Save Changes to persist.");
+              }}
+              onPick={(slot, file) => void handleLogoSelected(slot, file)}
+              onDrop={handleLogoDrop}
+              onDragStateChange={setDraggingSlot}
+            />
+            <LogoUploadField
+              slot="top-compact"
+              label="Small Logo"
+              description="Visible at the top of the sidebar when the sidebar is collapsed."
+              value={topCompactLogoUrl}
+              appName={appName}
+              isLoading={isLoading}
+              isUploading={uploadingSlot === "top-compact"}
+              isDragging={draggingSlot === "top-compact"}
+              inputRef={topCompactLogoInputRef}
+              onValueChange={setTopCompactLogoUrl}
+              onRemove={() => {
+                setTopCompactLogoUrl("");
+                setSuccess("Small Logo removed (not saved). Click Save Changes to persist.");
+              }}
+              onPick={(slot, file) => void handleLogoSelected(slot, file)}
+              onDrop={handleLogoDrop}
+              onDragStateChange={setDraggingSlot}
+            />
+            <LogoUploadField
+              slot="bottom"
+              label="Bottom Logo"
+              description="Visible above the sidebar copyright on tablet/desktop when the sidebar is expanded."
+              value={bottomLogoUrl}
+              appName={appName}
+              isLoading={isLoading}
+              isUploading={uploadingSlot === "bottom"}
+              isDragging={draggingSlot === "bottom"}
+              inputRef={bottomLogoInputRef}
+              onValueChange={setBottomLogoUrl}
+              onRemove={() => {
+                setBottomLogoUrl("");
+                setSuccess("Bottom Logo removed (not saved). Click Save Changes to persist.");
+              }}
+              onPick={(slot, file) => void handleLogoSelected(slot, file)}
+              onDrop={handleLogoDrop}
+              onDragStateChange={setDraggingSlot}
+            />
             <div>
               <Label htmlFor="themeJson">Theme JSON (CSS variables)</Label>
               <textarea

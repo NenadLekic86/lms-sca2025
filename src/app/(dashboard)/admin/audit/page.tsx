@@ -1,6 +1,7 @@
 import { FileText, Download } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import LocalDateTime from "@/components/ui/LocalDateTime";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 
 type AuditLogRow = {
@@ -504,7 +505,7 @@ export default async function AuditLogsPage({
               rows.map((log) => (
                 <tr key={log.id} className="hover:bg-muted/30 transition-colors">
                   <td className="px-6 py-4 text-sm text-muted-foreground font-mono">
-                    {log.created_at ? new Date(log.created_at).toLocaleString() : "-"}
+                    <LocalDateTime iso={log.created_at} fallback="-" />
                   </td>
                 <td className="px-6 py-4">
                   <span className={`px-2 py-1 text-xs font-medium rounded-full ${getActionBadge(log.action ?? "")}`}>

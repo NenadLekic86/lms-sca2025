@@ -1,6 +1,7 @@
 import { Download, FileSpreadsheet, FileText, Calendar, Users, BookOpen, Award } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import LocalDateTime from "@/components/ui/LocalDateTime";
 import { notFound, redirect } from "next/navigation";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
@@ -260,10 +261,11 @@ export default async function OrgExportPage({
                   const who = r.actor_email
                     ? `${r.actor_email}${r.actor_role ? ` (${roleLabel(r.actor_role)})` : ""}`
                     : "—";
-                  const when = r.created_at ? new Date(r.created_at).toLocaleString() : "—";
                   return (
                     <tr key={r.id} className="hover:bg-muted/30 transition-colors">
-                      <td className="px-6 py-4 text-sm text-muted-foreground font-mono whitespace-nowrap">{when}</td>
+                      <td className="px-6 py-4 text-sm text-muted-foreground font-mono whitespace-nowrap">
+                        <LocalDateTime iso={r.created_at} />
+                      </td>
                       <td className="px-6 py-4 text-sm text-foreground">{exportLabel(r.action ?? null)}</td>
                       <td className="px-6 py-4 text-sm text-muted-foreground">{who}</td>
                     </tr>

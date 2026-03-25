@@ -50,6 +50,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { email, role, organization_id, full_name } = validation.data;
+    const normalizedEmail = email.trim().toLowerCase();
 
     // 3. Check permissions based on caller's role
     
@@ -125,10 +126,133 @@ export async function POST(request: NextRequest) {
 
     // 4. Use Admin API (service role) to invite the user
     const adminClient = createAdminSupabaseClient();
+
+    if (caller.role === "organization_admin" && role === "member" && finalOrgId) {
+      const { data: existingUser, error: existingUserError } = await adminClient
+        .from("users")
+        .select("id, email, role, organization_id, deleted_at")
+        .eq("email", normalizedEmail)
+        .maybeSingle();
+
+      if (existingUserError) {
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 500,
+          code: "INTERNAL",
+          publicMessage: "Failed to validate existing user.",
+          internalMessage: existingUserError.message,
+        });
+        return apiError("INTERNAL", "Failed to validate existing user.", { status: 500 });
+      }
+
+      if (existingUser?.id) {
+        if (existingUser.deleted_at) {
+          return apiError("CONFLICT", "User already exists but is deleted.", { status: 409 });
+        }
+        if (existingUser.role !== "member") {
+          return apiError("CONFLICT", "Only existing members can be added to another organization.", { status: 409 });
+        }
+
+        const { data: existingMembership, error: membershipLookupError } = await adminClient
+          .from("organization_memberships")
+          .select("user_id")
+          .eq("user_id", existingUser.id)
+          .eq("organization_id", finalOrgId)
+          .maybeSingle();
+
+        if (membershipLookupError) {
+          await logApiEvent({
+            request,
+            caller,
+            outcome: "error",
+            status: 500,
+            code: "INTERNAL",
+            publicMessage: "Failed to validate organization membership.",
+            internalMessage: membershipLookupError.message,
+          });
+          return apiError("INTERNAL", "Failed to validate organization membership.", { status: 500 });
+        }
+
+        if (existingMembership?.user_id) {
+          return apiError("CONFLICT", "User is already a member of this organization.", { status: 409 });
+        }
+
+        const { error: membershipInsertError } = await adminClient
+          .from("organization_memberships")
+          .insert({
+            user_id: existingUser.id,
+            organization_id: finalOrgId,
+            role: "member",
+            is_active: true,
+          });
+
+        if (membershipInsertError) {
+          await logApiEvent({
+            request,
+            caller,
+            outcome: "error",
+            status: 500,
+            code: "INTERNAL",
+            publicMessage: "Failed to add member to organization.",
+            internalMessage: membershipInsertError.message,
+          });
+          return apiError("INTERNAL", "Failed to add member to organization.", { status: 500 });
+        }
+
+        try {
+          await adminClient.from('audit_logs').insert({
+            actor_user_id: caller.id,
+            actor_email: caller.email,
+            actor_role: caller.role,
+            action: 'add_existing_member_to_organization',
+            entity: 'organization_memberships',
+            entity_id: `${existingUser.id}:${finalOrgId}`,
+            target_user_id: existingUser.id,
+            metadata: {
+              invited_email: normalizedEmail,
+              invited_role: role,
+              organization_id: finalOrgId,
+              full_name: full_name,
+            },
+          });
+        } catch (auditError) {
+          console.error('Audit log insert failed (add_existing_member_to_organization):', auditError);
+        }
+
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "success",
+          status: 200,
+          publicMessage: "Existing member added to organization.",
+          details: { invited_role: role, organization_id: finalOrgId, existing_user_id: existingUser.id },
+        });
+
+        return apiOk(
+          {
+            user: {
+              id: existingUser.id,
+              email: existingUser.email ?? normalizedEmail,
+              role: existingUser.role,
+              organization_id: existingUser.organization_id ?? null,
+              full_name: full_name,
+            },
+            membership: {
+              user_id: existingUser.id,
+              organization_id: finalOrgId,
+              role: "member",
+            },
+          },
+          { status: 200, message: "Existing member added to organization." }
+        );
+      }
+    }
     
     const appUrl = env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '');
     const { data: authData, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(
-      email,
+      normalizedEmail,
       {
         // Optional: customize the redirect URL after user accepts invite
         redirectTo: `${appUrl}/reset-password`,
@@ -148,7 +272,7 @@ export async function POST(request: NextRequest) {
           code: "CONFLICT",
           publicMessage: "User with this email already exists.",
           internalMessage: inviteError.message,
-          details: { email },
+          details: { email: normalizedEmail },
         });
         return apiError("CONFLICT", "User with this email already exists.", { status: 409 });
       }
@@ -183,7 +307,7 @@ export async function POST(request: NextRequest) {
       .from('users')
       .insert({
         id: authData.user.id,
-        email: email,
+        email: normalizedEmail,
         role: role,
         organization_id: finalOrgId || null,
         full_name: full_name,
@@ -211,6 +335,33 @@ export async function POST(request: NextRequest) {
       return apiError("INTERNAL", "Failed to create user profile.", { status: 500 });
     }
 
+    if (role === "member" && finalOrgId) {
+      const { error: membershipInsertError } = await adminClient
+        .from("organization_memberships")
+        .insert({
+          user_id: authData.user.id,
+          organization_id: finalOrgId,
+          role: "member",
+          is_active: true,
+        });
+
+      if (membershipInsertError) {
+        await adminClient.from("users").delete().eq("id", authData.user.id);
+        await adminClient.auth.admin.deleteUser(authData.user.id);
+
+        await logApiEvent({
+          request,
+          caller,
+          outcome: "error",
+          status: 500,
+          code: "INTERNAL",
+          publicMessage: "Failed to create organization membership.",
+          internalMessage: membershipInsertError.message,
+        });
+        return apiError("INTERNAL", "Failed to create organization membership.", { status: 500 });
+      }
+    }
+
     // 6. Audit log (best-effort; never block invite success on logging issues)
     try {
       await adminClient.from('audit_logs').insert({
@@ -222,7 +373,7 @@ export async function POST(request: NextRequest) {
         entity_id: authData.user.id,
         target_user_id: authData.user.id,
         metadata: {
-          invited_email: email,
+          invited_email: normalizedEmail,
           invited_role: role,
           organization_id: finalOrgId ?? null,
           full_name: full_name,
@@ -246,7 +397,7 @@ export async function POST(request: NextRequest) {
       {
         user: {
           id: authData.user.id,
-          email: email,
+          email: normalizedEmail,
           role: role,
           organization_id: finalOrgId || null,
           full_name: full_name,

@@ -2,6 +2,7 @@ import Image from "next/image";
 import { notFound, redirect } from "next/navigation";
 import { LayoutDashboard, Users, BookOpen, Award, TrendingUp } from "lucide-react";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { getUserOrganizationMemberships, hasActiveOrganizationMembership } from "@/lib/organizations/memberships";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 import { fetchEnrollmentSummary } from "@/services/reportingService";
 import { RecentActivityTableV2, type RecentActivityItemV2 } from "@/components/table-v2/RecentActivityTableV2";
@@ -48,7 +49,12 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
 
   // Security: prevent org admins/members from guessing other org URLs.
   if (user.role === "organization_admin" || user.role === "member") {
-    if (!user.organization_id || user.organization_id !== orgId) {
+    const { hasMembership } = await hasActiveOrganizationMembership(
+      user.id,
+      orgId,
+      user.role === "organization_admin" ? ["organization_admin"] : ["member"]
+    );
+    if (!hasMembership) {
       redirect("/unauthorized");
     }
   }
@@ -70,8 +76,9 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
   ]);
 
   // Treat NULL as active (matches app semantics: only explicit false is disabled)
-  const activeUsersCount = Math.max(0, usersTotal.count - usersDisabled.count);
-  const usersCountError = usersTotal.error || usersDisabled.error;
+  let disabledUsersCount = usersDisabled.count;
+  let activeUsersCount = Math.max(0, usersTotal.count - disabledUsersCount);
+  let usersCountError = usersTotal.error || usersDisabled.error;
 
   const orgName = (orgRow as { name?: unknown } | null)?.name;
   const orgSlugFromRow = (orgRow as { slug?: unknown } | null)?.slug;
@@ -83,12 +90,206 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
         ? orgSlugFromRow.trim()
         : orgSlug || orgId;
 
+  if (user.role === "member") {
+    const { memberships, error: membershipsError } = await getUserOrganizationMemberships(user.id, {
+      roles: ["member"],
+      activeOnly: true,
+    });
+
+    const membershipOrgIds = memberships.map((membership) => membership.organizationId);
+    const membershipNames = memberships.map(
+      (membership) => membership.organizationName ?? membership.organizationSlug ?? membership.organizationId
+    );
+
+    const [{ data: assignmentRows, error: assignmentsError }, certificatesResult] = await Promise.all([
+      membershipOrgIds.length > 0
+        ? admin
+            .from("course_member_assignments")
+            .select("course_id, access_expires_at, organization_id")
+            .eq("user_id", user.id)
+            .in("organization_id", membershipOrgIds)
+        : Promise.resolve({ data: [], error: null }),
+      membershipOrgIds.length > 0
+        ? admin
+            .from("certificates")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", user.id)
+            .in("organization_id", membershipOrgIds)
+        : Promise.resolve({ count: 0, error: null }),
+    ]);
+
+    const certificateCount = membershipOrgIds.length > 0 ? certificatesResult.count ?? 0 : 0;
+
+    const assignedCourseCount = Array.from(
+      new Set(
+        (Array.isArray(assignmentRows) ? assignmentRows : [])
+          .filter((row) => {
+            const expiresAt = (row as { access_expires_at?: string | null }).access_expires_at ?? null;
+            if (!expiresAt) return true;
+            const expiresAtMs = new Date(expiresAt).getTime();
+            return !Number.isFinite(expiresAtMs) || expiresAtMs > Date.now();
+          })
+          .map((row) => ((row as { course_id?: unknown }).course_id as string | null) ?? null)
+          .filter((value): value is string => typeof value === "string" && value.length > 0)
+      )
+    ).length;
+
+    const memberStats: Stat[] = [
+      {
+        label: "Organizations",
+        value: String(memberships.length),
+        icon: Users,
+        color: "bg-blue-500",
+        error: membershipsError,
+      },
+      {
+        label: "Assigned Courses",
+        value: String(assignedCourseCount),
+        icon: BookOpen,
+        color: "bg-purple-500",
+        error: assignmentsError?.message ?? null,
+      },
+      {
+        label: "Total Issued Certificates",
+        value: String(certificateCount),
+        icon: Award,
+        color: "bg-amber-500",
+        error: certificatesResult.error?.message ?? null,
+      },
+    ];
+
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col items-start gap-3">
+          {typeof orgLogoUrl === "string" && orgLogoUrl.trim().length > 0 ? (
+            <div className="my-5 flex h-12 w-auto items-center justify-center overflow-hidden rounded bg-transparent">
+              <Image
+                src={orgLogoUrl}
+                alt={`${orgLabel} logo`}
+                width={160}
+                height={64}
+                className="h-full w-full object-contain"
+                priority
+              />
+            </div>
+          ) : (
+            <LayoutDashboard className="h-8 w-8 text-primary" />
+          )}
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Organization Dashboard</h1>
+            <p className="text-muted-foreground">
+              You belong to <span className="font-medium text-foreground">{memberships.length}</span>{" "}
+              {memberships.length === 1 ? "organization" : "organizations"}.
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {user.full_name && user.full_name.trim().length > 0 ? `Welcome back, ${user.full_name.trim()}` : "Welcome back"}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-3">
+          {memberStats.map((stat) => {
+            const Icon = stat.icon;
+            return (
+              <div key={stat.label} className="rounded-lg border bg-card p-6 shadow-sm">
+                <div className="flex items-center gap-4">
+                  <div className={`h-12 w-12 rounded-lg ${stat.color} flex items-center justify-center`}>
+                    <Icon className="h-6 w-6 text-white" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">{stat.label}</p>
+                    <p className="text-2xl font-bold text-foreground">{stat.value}</p>
+                    {stat.error ? <p className="text-xs text-destructive">{stat.error}</p> : null}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="rounded-lg border bg-card p-6 shadow-sm">
+          <div className="flex items-center gap-3">
+            <TrendingUp className="h-5 w-5 text-primary" />
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">Your Organizations</h2>
+              <p className="text-sm text-muted-foreground">All active organizations linked to your account.</p>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {membershipNames.length > 0 ? (
+              membershipNames.map((name) => (
+                <span
+                  key={name}
+                  className="inline-flex items-center rounded-full border bg-muted/40 px-3 py-1 text-sm text-foreground"
+                >
+                  {name}
+                </span>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">No active organizations found.</p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (user.role === "organization_admin") {
+    const membershipLookup = await getUserOrganizationMemberships(user.id, {
+      roles: ["organization_admin"],
+      activeOnly: true,
+    });
+    if (!membershipLookup.error) {
+      const orgMembership = membershipLookup.memberships.find((membership) => membership.organizationId === orgId);
+      if (orgMembership) {
+        const memberIdsLookup = await createAdminSupabaseClient()
+          .from("organization_memberships")
+          .select("user_id")
+          .eq("organization_id", orgId)
+          .eq("is_active", true)
+          .in("role", ["member", "organization_admin"]);
+
+        if (memberIdsLookup.error) {
+          usersCountError = memberIdsLookup.error.message;
+        } else {
+          const userIds = Array.from(
+            new Set(
+              (Array.isArray(memberIdsLookup.data) ? memberIdsLookup.data : [])
+                .map((row) => ((row as { user_id?: unknown }).user_id as string | null) ?? null)
+                .filter((value): value is string => typeof value === "string" && value.length > 0)
+            )
+          );
+
+          if (userIds.length > 0) {
+            const { data: orgUsers, error: orgUsersError } = await admin
+              .from("users")
+              .select("id, is_active")
+              .in("id", userIds)
+              .is("deleted_at", null);
+
+            if (orgUsersError) {
+              usersCountError = orgUsersError.message;
+            } else {
+              const visibleOrgUsers = Array.isArray(orgUsers) ? orgUsers : [];
+              const disabledCount = visibleOrgUsers.filter((row) => (row as { is_active?: boolean | null }).is_active === false).length;
+              disabledUsersCount = disabledCount;
+              activeUsersCount = Math.max(0, visibleOrgUsers.length - disabledCount);
+            }
+          } else {
+            disabledUsersCount = 0;
+            activeUsersCount = 0;
+          }
+        }
+      }
+    }
+  }
+
   const stats: Stat[] = [
     ...(canSeeUsersCard
       ? [
           {
             label: "Users (Active / Disabled)",
-            value: `${activeUsersCount} / ${usersDisabled.count}`,
+            value: `${activeUsersCount} / ${disabledUsersCount}`,
             icon: Users,
             color: "bg-blue-500",
             error: usersCountError,
@@ -96,7 +297,7 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
         ]
       : []),
     { label: "Courses", value: String(courses.count), icon: BookOpen, color: "bg-purple-500", error: courses.error },
-    { label: "Certificates", value: String(certificates.count), icon: Award, color: "bg-amber-500", error: certificates.error },
+    { label: "Total Issued Certificates", value: String(certificates.count), icon: Award, color: "bg-amber-500", error: certificates.error },
   ];
 
   // Course progress (org admin & above)
@@ -112,35 +313,33 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
   let courseProgressError: string | null = null;
   let courseProgressRows: CourseProgressRow[] = [];
 
-  if (user.role !== "member") {
-    const summary = await fetchEnrollmentSummary({ organizationId: orgId, limit: 50000 });
-    if (summary.error) courseProgressError = summary.error;
-    else {
-      const byCourse: Record<string, { title: string; enrolled: number; certified: number }> = {};
-      for (const r of summary.rows) {
-        const cid = r.course_id;
-        const title = (r.course_title ?? "").trim() || "Untitled course";
-        byCourse[cid] = byCourse[cid] || { title, enrolled: 0, certified: 0 };
-        byCourse[cid].enrolled += 1;
-        if (r.certified) byCourse[cid].certified += 1;
-      }
-
-      courseProgressRows = Object.entries(byCourse)
-        .map(([course_id, v]) => {
-          const not_certified = Math.max(0, v.enrolled - v.certified);
-          const certification_rate = v.enrolled > 0 ? v.certified / v.enrolled : 0;
-          return {
-            course_id,
-            course_title: v.title,
-            enrolled: v.enrolled,
-            certified: v.certified,
-            not_certified,
-            certification_rate,
-          };
-        })
-        .sort((a, b) => b.enrolled - a.enrolled)
-        .slice(0, 8);
+  const summary = await fetchEnrollmentSummary({ organizationId: orgId, limit: 50000 });
+  if (summary.error) courseProgressError = summary.error;
+  else {
+    const byCourse: Record<string, { title: string; enrolled: number; certified: number }> = {};
+    for (const r of summary.rows) {
+      const cid = r.course_id;
+      const title = (r.course_title ?? "").trim() || "Untitled course";
+      byCourse[cid] = byCourse[cid] || { title, enrolled: 0, certified: 0 };
+      byCourse[cid].enrolled += 1;
+      if (r.certified) byCourse[cid].certified += 1;
     }
+
+    courseProgressRows = Object.entries(byCourse)
+      .map(([course_id, v]) => {
+        const not_certified = Math.max(0, v.enrolled - v.certified);
+        const certification_rate = v.enrolled > 0 ? v.certified / v.enrolled : 0;
+        return {
+          course_id,
+          course_title: v.title,
+          enrolled: v.enrolled,
+          certified: v.certified,
+          not_certified,
+          certification_rate,
+        };
+      })
+      .sort((a, b) => b.enrolled - a.enrolled)
+      .slice(0, 8);
   }
 
   // Recent activity (org-scoped): enrollments, certificates issued.
@@ -150,80 +349,78 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
   let activityError: string | null = null;
   let activityEvents: ActivityEventDisplay[] = [];
 
-  if (user.role !== "member") {
-    try {
-      const [{ data: enrollRows, error: enrollErr }, { data: certRows, error: certErr }] = await Promise.all([
-        admin
-          .from("course_enrollments")
-          .select("user_id, course_id, enrolled_at")
-          .eq("organization_id", orgId)
-          .order("enrolled_at", { ascending: false })
-          .limit(12),
-        admin
-          .from("certificates")
-          .select("user_id, course_id, issued_at, created_at, status")
-          .eq("organization_id", orgId)
-          .order("created_at", { ascending: false })
-          .limit(12),
+  try {
+    const [{ data: enrollRows, error: enrollErr }, { data: certRows, error: certErr }] = await Promise.all([
+      admin
+        .from("course_enrollments")
+        .select("user_id, course_id, enrolled_at")
+        .eq("organization_id", orgId)
+        .order("enrolled_at", { ascending: false })
+        .limit(12),
+      admin
+        .from("certificates")
+        .select("user_id, course_id, issued_at, created_at, status")
+        .eq("organization_id", orgId)
+        .order("created_at", { ascending: false })
+        .limit(12),
+    ]);
+
+    const firstErr = enrollErr?.message ?? certErr?.message ?? null;
+    if (firstErr) {
+      activityError = firstErr;
+    } else {
+      const events: ActivityEvent[] = [];
+
+      for (const r of (Array.isArray(enrollRows) ? enrollRows : []) as Array<{ user_id?: string | null; course_id?: string | null; enrolled_at?: string | null }>) {
+        const ts = typeof r.enrolled_at === "string" ? r.enrolled_at : null;
+        if (!ts) continue;
+        events.push({ ts, type: "enrolled", user_id: r.user_id ?? null, course_id: r.course_id ?? null });
+      }
+
+      for (const r of (Array.isArray(certRows) ? certRows : []) as Array<{ user_id?: string | null; course_id?: string | null; issued_at?: string | null; created_at?: string | null }>) {
+        const ts = (typeof r.issued_at === "string" ? r.issued_at : null) ?? (typeof r.created_at === "string" ? r.created_at : null);
+        if (!ts) continue;
+        events.push({ ts, type: "certificate_issued", user_id: r.user_id ?? null, course_id: r.course_id ?? null });
+      }
+
+      // Hydrate user/course/test labels for the small recent set
+      const userIds = Array.from(new Set(events.map((e) => e.user_id).filter((v): v is string => typeof v === "string" && v.length > 0)));
+      const courseIds = Array.from(new Set(events.map((e) => e.course_id).filter((v): v is string => typeof v === "string" && v.length > 0)));
+
+      const [{ data: usersData }, { data: coursesData }] = await Promise.all([
+        userIds.length > 0 ? admin.from("users").select("id, full_name, email").in("id", userIds) : Promise.resolve({ data: [] }),
+        courseIds.length > 0 ? admin.from("courses").select("id, title").in("id", courseIds) : Promise.resolve({ data: [] }),
       ]);
 
-      const firstErr = enrollErr?.message ?? certErr?.message ?? null;
-      if (firstErr) {
-        activityError = firstErr;
-      } else {
-        const events: ActivityEvent[] = [];
-
-        for (const r of (Array.isArray(enrollRows) ? enrollRows : []) as Array<{ user_id?: string | null; course_id?: string | null; enrolled_at?: string | null }>) {
-          const ts = typeof r.enrolled_at === "string" ? r.enrolled_at : null;
-          if (!ts) continue;
-          events.push({ ts, type: "enrolled", user_id: r.user_id ?? null, course_id: r.course_id ?? null });
-        }
-
-        for (const r of (Array.isArray(certRows) ? certRows : []) as Array<{ user_id?: string | null; course_id?: string | null; issued_at?: string | null; created_at?: string | null }>) {
-          const ts = (typeof r.issued_at === "string" ? r.issued_at : null) ?? (typeof r.created_at === "string" ? r.created_at : null);
-          if (!ts) continue;
-          events.push({ ts, type: "certificate_issued", user_id: r.user_id ?? null, course_id: r.course_id ?? null });
-        }
-
-        // Hydrate user/course/test labels for the small recent set
-        const userIds = Array.from(new Set(events.map((e) => e.user_id).filter((v): v is string => typeof v === "string" && v.length > 0)));
-        const courseIds = Array.from(new Set(events.map((e) => e.course_id).filter((v): v is string => typeof v === "string" && v.length > 0)));
-
-        const [{ data: usersData }, { data: coursesData }] = await Promise.all([
-          userIds.length > 0 ? admin.from("users").select("id, full_name, email").in("id", userIds) : Promise.resolve({ data: [] }),
-          courseIds.length > 0 ? admin.from("courses").select("id, title").in("id", courseIds) : Promise.resolve({ data: [] }),
-        ]);
-
-        const userLabelById = new Map<string, string>();
-        for (const u of (Array.isArray(usersData) ? usersData : []) as Array<{ id?: unknown; full_name?: unknown; email?: unknown }>) {
-          const id = typeof u.id === "string" ? u.id : null;
-          if (!id) continue;
-          const fullName = typeof u.full_name === "string" && u.full_name.trim().length ? u.full_name.trim() : null;
-          const email = typeof u.email === "string" && u.email.trim().length ? u.email.trim() : null;
-          userLabelById.set(id, fullName ?? email ?? id);
-        }
-
-        const courseLabelById = new Map<string, string>();
-        for (const c of (Array.isArray(coursesData) ? coursesData : []) as Array<{ id?: unknown; title?: unknown }>) {
-          const id = typeof c.id === "string" ? c.id : null;
-          if (!id) continue;
-          const title = typeof c.title === "string" && c.title.trim().length ? c.title.trim() : null;
-          courseLabelById.set(id, title ?? "Untitled course");
-        }
-
-        // Final render list (most recent first)
-        activityEvents = events
-          .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0))
-          .slice(0, 12)
-          .map((e) => ({
-            ...e,
-            user_label: e.user_id ? (userLabelById.get(e.user_id) ?? e.user_id) : "Unknown user",
-            course_label: e.course_id ? (courseLabelById.get(e.course_id) ?? e.course_id) : "Unknown course",
-          }));
+      const userLabelById = new Map<string, string>();
+      for (const u of (Array.isArray(usersData) ? usersData : []) as Array<{ id?: unknown; full_name?: unknown; email?: unknown }>) {
+        const id = typeof u.id === "string" ? u.id : null;
+        if (!id) continue;
+        const fullName = typeof u.full_name === "string" && u.full_name.trim().length ? u.full_name.trim() : null;
+        const email = typeof u.email === "string" && u.email.trim().length ? u.email.trim() : null;
+        userLabelById.set(id, fullName ?? email ?? id);
       }
-    } catch (e) {
-      activityError = e instanceof Error ? e.message : "Failed to load activity";
+
+      const courseLabelById = new Map<string, string>();
+      for (const c of (Array.isArray(coursesData) ? coursesData : []) as Array<{ id?: unknown; title?: unknown }>) {
+        const id = typeof c.id === "string" ? c.id : null;
+        if (!id) continue;
+        const title = typeof c.title === "string" && c.title.trim().length ? c.title.trim() : null;
+        courseLabelById.set(id, title ?? "Untitled course");
+      }
+
+      // Final render list (most recent first)
+      activityEvents = events
+        .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0))
+        .slice(0, 12)
+        .map((e) => ({
+          ...e,
+          user_label: e.user_id ? (userLabelById.get(e.user_id) ?? e.user_id) : "Unknown user",
+          course_label: e.course_id ? (courseLabelById.get(e.course_id) ?? e.course_id) : "Unknown course",
+        }));
     }
+  } catch (e) {
+    activityError = e instanceof Error ? e.message : "Failed to load activity";
   }
 
   return (
@@ -259,7 +456,7 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {stats.map((stat) => {
           const Icon = stat.icon;
           return (
@@ -293,11 +490,7 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
             <BookOpen className="h-5 w-5" />
             Course Progress
           </h2>
-          {user.role === "member" ? (
-            <div className="text-muted-foreground text-center py-8">
-              <p>Course progress is available for administrators.</p>
-            </div>
-          ) : courseProgressError ? (
+          {courseProgressError ? (
             <div className="rounded-md border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
               Failed to load course progress: {courseProgressError}
             </div>
@@ -355,11 +548,7 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
             <TrendingUp className="h-5 w-5" />
             Recent Activity
           </h2>
-          {user.role === "member" ? (
-            <div className="text-muted-foreground text-center py-8">
-              <p>Recent activity is available for administrators.</p>
-            </div>
-          ) : activityError ? (
+          {activityError ? (
             <div className="rounded-md border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
               Failed to load activity: {activityError}
             </div>
@@ -371,7 +560,6 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
           ) : (
             <RecentActivityTableV2
               items={activityEvents.map((e, idx): RecentActivityItemV2 => {
-                const time = e.ts ? new Date(e.ts).toLocaleString() : "-";
                 const actor = e.user_label; // Option 1: Actor = user_label
                 const subject = e.course_label; // Option 1: Subject = course_label
 
@@ -382,7 +570,8 @@ export default async function OrgDashboardPage({ params }: OrgDashboardProps) {
 
                 return {
                   id: `${e.type}-${e.ts}-${idx}`,
-                  time,
+                  time: "—",
+                  timeIso: e.ts ?? null,
                   actor,
                   subject,
                   title,

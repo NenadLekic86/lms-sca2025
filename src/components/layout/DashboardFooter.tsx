@@ -10,7 +10,7 @@ export async function DashboardFooter() {
     <footer className="border-t py-4 px-6 bg-background">
       <div className="flex items-center justify-between">
         <div className="flex gap-6 text-sm text-muted-foreground">
-          <Link href="/company" className="hover:text-foreground transition-colors">
+          <Link href="https://www.smartconsulting-agency.com/" target="_blank" rel="noreferrer" className="hover:text-foreground transition-colors">
             Company
           </Link>
           <Link href="/support" className="hover:text-foreground transition-colors">

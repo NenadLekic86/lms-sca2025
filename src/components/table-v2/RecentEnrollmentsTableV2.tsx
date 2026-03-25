@@ -5,12 +5,14 @@ import { BookOpen, CalendarDays, ChevronRight, Clock, Building2, User, X, BadgeC
 
 import { HelpText } from "@/components/table-v2/controls";
 import { useBodyScrollLock, useEscClose, useMountedForAnimation } from "@/components/table-v2/hooks";
+import LocalDateTime from "@/components/ui/LocalDateTime";
 
 export type EnrollmentResultV2 = "certified" | "not_certified" | null;
 
 export type RecentEnrollmentItemV2 = {
   id: string;
   time: string; // already formatted for display (e.g. toLocaleString on server)
+  timeIso?: string | null;
   organization?: string | null;
   user: string;
   course: string;
@@ -87,7 +89,9 @@ export function RecentEnrollmentsTableV2({
                       setDrawerOpen(true);
                     }}
                   >
-                    <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{it.time}</td>
+                    <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">
+                      <LocalDateTime iso={it.timeIso} fallback={it.time} />
+                    </td>
                     <td className="px-4 py-3 text-sm">
                       <div className="font-medium text-foreground">{it.user}</div>
                     </td>
@@ -130,7 +134,9 @@ export function RecentEnrollmentsTableV2({
                   <div className="mt-1 text-xs text-muted-foreground truncate">{it.user}</div>
                   <div className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
                     <Clock className="h-3.5 w-3.5" />
-                    <span className="font-mono whitespace-nowrap">{it.time}</span>
+                    <span className="font-mono whitespace-nowrap">
+                      <LocalDateTime iso={it.timeIso} fallback={it.time} />
+                    </span>
                   </div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -238,7 +244,9 @@ function RecentEnrollmentDetailsDrawer({
                   <CalendarDays className="h-4 w-4" />
                   Time
                 </span>
-                <span className="text-foreground text-right">{item.time}</span>
+                <span className="text-foreground text-right">
+                  <LocalDateTime iso={item.timeIso} fallback={item.time} />
+                </span>
               </div>
 
               <div className="flex items-start justify-between gap-4">
@@ -268,14 +276,18 @@ function RecentEnrollmentDetailsDrawer({
               {item.enrolledAt ? (
                 <div className="flex items-start justify-between gap-4">
                   <span className="text-muted-foreground">Enrolled</span>
-                  <span className="text-foreground text-right">{new Date(item.enrolledAt).toLocaleString()}</span>
+                  <span className="text-foreground text-right">
+                    <LocalDateTime iso={item.enrolledAt} />
+                  </span>
                 </div>
               ) : null}
 
               {item.certificateIssuedAt ? (
                 <div className="flex items-start justify-between gap-4">
                   <span className="text-muted-foreground">Certificate issued</span>
-                  <span className="text-foreground text-right">{new Date(item.certificateIssuedAt).toLocaleString()}</span>
+                  <span className="text-foreground text-right">
+                    <LocalDateTime iso={item.certificateIssuedAt} />
+                  </span>
                 </div>
               ) : null}
             </div>

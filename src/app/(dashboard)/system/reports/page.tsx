@@ -304,12 +304,12 @@ export default async function SystemReportsPage({
                 "Unknown user";
               const courseLabel = (r.course_title ?? "").trim() || "Untitled course";
 
-              const time = r.enrolled_at ? new Date(r.enrolled_at).toLocaleString() : "—";
               const id = `${r.organization_id}:${r.user_id}:${r.course_id}:${r.enrolled_at ?? idx}`;
 
               return {
                 id,
-                time,
+                time: "—",
+                timeIso: r.enrolled_at ?? null,
                 organization: orgLabel,
                 user: userLabel,
                 course: courseLabel,

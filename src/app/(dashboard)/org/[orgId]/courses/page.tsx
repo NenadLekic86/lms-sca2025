@@ -4,6 +4,7 @@ import { BookOpen, Plus } from "lucide-react";
 import { notFound } from "next/navigation";
 import { createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
+import { getUserOrganizationMemberships } from "@/lib/organizations/memberships";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 
 type CourseRow = {
@@ -29,6 +30,10 @@ function formatDate(iso: string) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+}
+
+function currentIsoTimestamp() {
+  return new Date().toISOString();
 }
 
 function pickCoverGradient(seed: string) {
@@ -74,14 +79,74 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
 
   const supabase = await createServerSupabaseClient();
 
-  // Org-only courses: list only org-owned courses on org pages.
-  const coursesQuery = supabase
-    .from("courses")
-    .select("id, slug, title, description, excerpt, cover_image_url, created_at, is_published, visibility_scope, organization_id")
-    .order("created_at", { ascending: false })
-    .limit(200);
+  let coursesError: { message: string } | null = null;
+  let coursesData: CourseRow[] = [];
+  const membershipOrgMeta = new Map<string, { label: string; slug: string }>();
+  const nowIso = currentIsoTimestamp();
 
-  const { data: coursesData, error: coursesError } = await coursesQuery.eq("organization_id", orgId);
+  if (user.role === "member") {
+    const { memberships, error: membershipsError } = await getUserOrganizationMemberships(user.id, {
+      roles: ["member"],
+      activeOnly: true,
+    });
+    if (membershipsError) {
+      coursesError = { message: membershipsError };
+    } else {
+      memberships.forEach((membership) => {
+        const label = membership.organizationName ?? membership.organizationSlug ?? membership.organizationId;
+        const slug = membership.organizationSlug ?? membership.organizationId;
+        membershipOrgMeta.set(membership.organizationId, { label, slug });
+      });
+
+      const membershipOrgIds = memberships.map((membership) => membership.organizationId);
+      if (membershipOrgIds.length > 0) {
+        const { data: assignmentRows, error: assignmentsError } = await supabase
+          .from("course_member_assignments")
+          .select("course_id, organization_id, access_expires_at")
+          .eq("user_id", user.id)
+          .in("organization_id", membershipOrgIds);
+
+        if (assignmentsError) {
+          coursesError = { message: assignmentsError.message };
+        } else {
+          const assignedCourseIds = Array.from(
+            new Set(
+              (Array.isArray(assignmentRows) ? assignmentRows : [])
+                .filter((row) => {
+                  const expiresAt = (row as { access_expires_at?: string | null }).access_expires_at ?? null;
+                  return !expiresAt || expiresAt > nowIso;
+                })
+                .map((row) => ((row as { course_id?: unknown }).course_id as string | null) ?? null)
+                .filter((value): value is string => typeof value === "string" && value.length > 0)
+            )
+          );
+
+          if (assignedCourseIds.length > 0) {
+            const { data, error } = await supabase
+              .from("courses")
+              .select("id, slug, title, description, excerpt, cover_image_url, created_at, is_published, visibility_scope, organization_id")
+              .in("id", assignedCourseIds)
+              .eq("is_published", true)
+              .order("created_at", { ascending: false })
+              .limit(200);
+
+            coursesData = (Array.isArray(data) ? data : []) as CourseRow[];
+            if (error) coursesError = { message: error.message };
+          }
+        }
+      }
+    }
+  } else {
+    const { data, error } = await supabase
+      .from("courses")
+      .select("id, slug, title, description, excerpt, cover_image_url, created_at, is_published, visibility_scope, organization_id")
+      .eq("organization_id", orgId)
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    coursesData = (Array.isArray(data) ? data : []) as CourseRow[];
+    if (error) coursesError = { message: error.message };
+  }
 
   const courses = (Array.isArray(coursesData) ? coursesData : []) as CourseRow[];
 
@@ -92,7 +157,11 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
           <BookOpen className="h-8 w-8 text-primary shrink-0" />
           <div>
             <h1 className="text-2xl font-bold text-foreground">Courses</h1>
-            <p className="text-muted-foreground">Your Journey Begins with a Single Lesson.</p>
+            <p className="text-muted-foreground">
+              {user.role === "member"
+                ? "Assigned published courses from all organizations you belong to."
+                : "Your Journey Begins with a Single Lesson."}
+            </p>
           </div>
         </div>
 
@@ -115,7 +184,7 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {courses.length === 0 ? (
           <div className="col-span-full rounded-lg border bg-card p-10 text-center text-muted-foreground">
-            No courses available yet.
+            {user.role === "member" ? "No assigned courses available yet." : "No courses available yet."}
           </div>
         ) : (
           courses.map((course) => {
@@ -123,8 +192,19 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
             const excerpt = (course.excerpt ?? course.description ?? "").trim();
             const createdAt = course.created_at ?? "";
             const isOwnedByOrg = course.organization_id === orgId;
-            const authorLabel = isOwnedByOrg ? "Your organization" : "ISO LMS";
+            const courseOrgMeta =
+              (typeof course.organization_id === "string" ? membershipOrgMeta.get(course.organization_id) : null) ?? null;
+            const authorLabel =
+              user.role === "member"
+                ? (courseOrgMeta?.label ?? "Assigned organization")
+                : isOwnedByOrg
+                  ? "Your organization"
+                  : "ISO LMS";
             const status = course.is_published ? "published" : "draft";
+            const courseOrgKey =
+              user.role === "member"
+                ? (courseOrgMeta?.slug ?? orgSlug)
+                : orgSlug;
 
             const canEdit =
               user.role === "organization_admin" && user.organization_id === orgId && isOwnedByOrg;
@@ -183,11 +263,11 @@ export default async function CoursesPage({ params }: { params: Promise<{ orgId:
                     <div className="flex items-center gap-2">
                       {canEdit ? (
                         <Button size="sm" variant="secondary" asChild>
-                          <Link href={`/org/${orgSlug}/courses/${course.id}/edit-v2`}>Edit</Link>
+                          <Link href={`/org/${courseOrgKey}/courses/${course.id}/edit-v2`}>Edit</Link>
                         </Button>
                       ) : null}
                       <Button size="sm" variant="outline" asChild>
-                        <Link href={`/org/${orgSlug}/courses/${(course.slug ?? "").trim() || course.id}`}>View</Link>
+                        <Link href={`/org/${courseOrgKey}/courses/${(course.slug ?? "").trim() || course.id}`}>View</Link>
                       </Button>
                     </div>
                   </div>

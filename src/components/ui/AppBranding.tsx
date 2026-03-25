@@ -7,6 +7,9 @@ import { loadBranding } from '@/lib/theme/loadBranding';
 type Branding = {
   app_name: string | null;
   logo_url: string | null;
+  top_logo_url: string | null;
+  top_logo_compact_url: string | null;
+  bottom_logo_url: string | null;
   updated_at?: string | null;
 };
 
@@ -14,9 +17,11 @@ const FALLBACK_LOGO_SRC = "/brandingLogo.webp";
 const BRANDING_CACHE_KEY = "iso_lms_branding_cache_v1";
 
 export default function AppBranding({
+  variant = "legacy",
   width = 140,
   height = 40,
 }: {
+  variant?: "legacy" | "top" | "top-compact" | "bottom";
   width?: number;
   height?: number;
 }) {
@@ -65,8 +70,30 @@ export default function AppBranding({
   }, []);
 
   const appName = branding?.app_name || 'ISO LMS';
-  const logoUrl =
+  const legacyLogoUrl =
     branding?.logo_url && branding.logo_url.trim().length > 0 ? branding.logo_url : null;
+  const topLogoUrl =
+    branding?.top_logo_url && branding.top_logo_url.trim().length > 0 ? branding.top_logo_url : null;
+  const topCompactLogoUrl =
+    branding?.top_logo_compact_url && branding.top_logo_compact_url.trim().length > 0
+      ? branding.top_logo_compact_url
+      : null;
+  const bottomLogoUrl =
+    branding?.bottom_logo_url && branding.bottom_logo_url.trim().length > 0 ? branding.bottom_logo_url : null;
+
+  const logoUrl = (() => {
+    switch (variant) {
+      case "top":
+        return topLogoUrl ?? legacyLogoUrl;
+      case "top-compact":
+        return topCompactLogoUrl ?? topLogoUrl ?? legacyLogoUrl;
+      case "bottom":
+        return bottomLogoUrl ?? legacyLogoUrl;
+      case "legacy":
+      default:
+        return legacyLogoUrl;
+    }
+  })();
 
   // Cache-bust if the URL stays the same but content changes.
   const src = logoUrl

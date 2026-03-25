@@ -5,7 +5,6 @@ import Link from "next/link";
 import { Bell, BookOpen, ChevronDown, LogOut, Palette, Settings, User } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import AppBranding from "../ui/AppBranding";
 import { ROLE_PRIMARY_CACHE_KEY } from "@/lib/theme/themeConstants";
 import { fetchJson } from "@/lib/api";
 
@@ -274,14 +273,8 @@ export function DashboardHeader() {
   }, [isLoggingOut]);
 
   return (
-    <header className="sticky top-0 z-99999">
-      <div className="flex h-full items-center justify-between px-6 py-1">
-        <div className="flex items-center gap-3">
-          <div className="origin-left">
-            <AppBranding />
-          </div>
-        </div>
-
+    <header className="sticky top-0 z-50 border-b bg-background">
+      <div className="flex h-full items-center justify-end px-6 py-1">
         <div className="flex items-center gap-4">
           {/* Notifications (only if logged in) */}
           {isLoggedIn ? (

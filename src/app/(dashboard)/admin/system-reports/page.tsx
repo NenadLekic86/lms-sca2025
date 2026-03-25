@@ -1,6 +1,7 @@
 import { BarChart3 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import LocalDateTime from "@/components/ui/LocalDateTime";
 import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server";
 
 type AuditRow = {
@@ -244,7 +245,7 @@ export default async function SystemReportsPage({
                   return (
                     <tr key={r.id} className="hover:bg-muted/30 transition-colors">
                       <td className="px-6 py-4 text-sm text-muted-foreground font-mono">
-                        {r.created_at ? new Date(r.created_at).toLocaleString() : "—"}
+                        <LocalDateTime iso={r.created_at} />
                       </td>
                       <td className="px-6 py-4">
                         <span className={`px-2 py-1 text-xs font-medium rounded-full ${badgeClass(r.action ?? null)}`}>
@@ -389,7 +390,7 @@ export default async function SystemReportsPage({
                   return (
                     <tr key={r.id} className="hover:bg-muted/30 transition-colors">
                       <td className="px-6 py-4 text-sm text-muted-foreground font-mono">
-                        {r.created_at ? new Date(r.created_at).toLocaleString() : "—"}
+                        <LocalDateTime iso={r.created_at} />
                       </td>
                       <td className="px-6 py-4 text-sm text-foreground font-mono">{r.support_id ?? "—"}</td>
                       <td className="px-6 py-4 text-sm text-foreground">
@@ -411,7 +412,9 @@ export default async function SystemReportsPage({
                           {resolved ? "Resolved" : "Open"}
                         </span>
                         {resolved && r.resolved_at ? (
-                          <div className="mt-1 text-xs text-muted-foreground">at {new Date(r.resolved_at).toLocaleString()}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            at <LocalDateTime iso={r.resolved_at} />
+                          </div>
                         ) : null}
                       </td>
                       <td className="px-6 py-4 text-sm text-muted-foreground">
@@ -480,7 +483,7 @@ export default async function SystemReportsPage({
                 unauthRows.map((r) => (
                   <tr key={r.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-6 py-4 text-sm text-muted-foreground font-mono">
-                      {r.created_at ? new Date(r.created_at).toLocaleString() : "—"}
+                      <LocalDateTime iso={r.created_at} />
                     </td>
                     <td className="px-6 py-4">
                       <span className={`px-2 py-1 text-xs font-medium rounded-full ${unauthBadgeClass(r.outcome)}`}>

@@ -286,13 +286,13 @@ export default async function SystemExportPage({
                     ? r.entity_id
                     : getMetaString(meta, "organization_id");
                 const who = r.actor_email ? `${r.actor_email}${r.actor_role ? ` (${roleLabel(r.actor_role)})` : ""}` : "—";
-                const when = r.created_at ? new Date(r.created_at).toLocaleString() : "—";
                 const what = exportLabel(r.action ?? null);
                 const orgLabel = orgId ? (orgLabelById.get(orgId) ?? orgId) : null;
 
                 return {
                   id: r.id,
-                  time: when,
+                  time: "—",
+                  timeIso: r.created_at ?? null,
                   what,
                   who,
                   organization: orgLabel,

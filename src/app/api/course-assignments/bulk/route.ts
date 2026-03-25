@@ -4,6 +4,7 @@ import { createAdminSupabaseClient, getServerUser } from "@/lib/supabase/server"
 import { apiError, apiOk, readJsonBody } from "@/lib/api/response";
 import { logApiEvent } from "@/lib/audit/apiEvents";
 import { computeAccessExpiresAt, type AccessDurationKey, isAccessDurationKey } from "@/lib/courseAssignments/access";
+import { getActiveOrganizationMemberIds } from "@/lib/organizations/memberships";
 
 export const runtime = "nodejs";
 
@@ -104,6 +105,20 @@ export async function POST(request: NextRequest) {
 
   const userRows = (Array.isArray(usersData) ? usersData : []) as TargetUserRow[];
   const byId = new Map(userRows.map((u) => [u.id, u]));
+  const membershipLookup = await getActiveOrganizationMemberIds(caller.organization_id, ["member"]);
+  if (membershipLookup.error) {
+    await logApiEvent({
+      request,
+      caller,
+      outcome: "error",
+      status: 500,
+      code: "INTERNAL",
+      publicMessage: "Failed to validate selected users.",
+      internalMessage: membershipLookup.error,
+    });
+    return apiError("INTERNAL", "Failed to validate selected users.", { status: 500 });
+  }
+  const memberIdsInOrg = new Set(membershipLookup.userIds);
 
   const eligibleUserIds: string[] = [];
   const failures: Array<{ user_id: string; reason: string }> = [];
@@ -113,7 +128,7 @@ export async function POST(request: NextRequest) {
       failures.push({ user_id: userId, reason: "User not found." });
       continue;
     }
-    if (row.organization_id !== caller.organization_id) {
+    if (!memberIdsInOrg.has(userId)) {
       failures.push({ user_id: userId, reason: "User does not belong to your organization." });
       continue;
     }

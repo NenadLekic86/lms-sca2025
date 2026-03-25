@@ -5,6 +5,7 @@ import { BookOpen, Play, CheckCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { getUserOrganizationMemberships } from "@/lib/organizations/memberships";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 
 export const fetchCache = "force-no-store";
@@ -18,10 +19,12 @@ type CourseRow = {
   cover_image_url?: string | null;
   builder_version?: number | null;
   created_at?: string | null;
+  organization_id?: string | null;
 };
 
 type CourseAccessRow = {
   course_id: string | null;
+  organization_id: string | null;
   access_expires_at: string | null;
 };
 
@@ -74,19 +77,35 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
     notFound();
   }
 
-  const orgId = org.id; // UUID (DB/API)
   const orgSlug = org.slug; // canonical slug (links)
 
   if (user.role !== "member") redirect(`/org/${orgSlug}`);
-  if (!user.organization_id || user.organization_id !== orgId) redirect("/unauthorized");
 
   const supabase = await createServerSupabaseClient();
+  const { memberships, error: membershipsError } = await getUserOrganizationMemberships(user.id, {
+    roles: ["member"],
+    activeOnly: true,
+  });
+  if (membershipsError) {
+    throw new Error(membershipsError);
+  }
+
+  const membershipOrgIds = memberships.map((membership) => membership.organizationId);
+  const membershipOrgMeta = new Map(
+    memberships.map((membership) => [
+      membership.organizationId,
+      {
+        label: membership.organizationName ?? membership.organizationSlug ?? membership.organizationId,
+        slug: membership.organizationSlug ?? membership.organizationId,
+      },
+    ])
+  );
 
   const { data: enrollments } = await supabase
     .from("course_enrollments")
-    .select("course_id, status")
+    .select("course_id, status, organization_id")
     .eq("user_id", user.id)
-    .eq("organization_id", orgId)
+    .in("organization_id", membershipOrgIds.length > 0 ? membershipOrgIds : ["00000000-0000-0000-0000-000000000000"])
     .eq("status", "active");
 
   const courseIds = (Array.isArray(enrollments) ? enrollments : [])
@@ -97,9 +116,9 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
     courseIds.length > 0
       ? await supabase
           .from("course_member_assignments")
-          .select("course_id, access_expires_at")
-          .eq("organization_id", orgId)
+          .select("course_id, organization_id, access_expires_at")
           .eq("user_id", user.id)
+          .in("organization_id", membershipOrgIds.length > 0 ? membershipOrgIds : ["00000000-0000-0000-0000-000000000000"])
           .in("course_id", courseIds)
       : { data: [] };
 
@@ -114,7 +133,7 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
     courseIds.length > 0
       ? await supabase
           .from("courses")
-          .select("id, slug, title, excerpt, is_published, cover_image_url, builder_version, created_at")
+          .select("id, slug, title, excerpt, is_published, cover_image_url, builder_version, created_at, organization_id")
           .in("id", courseIds)
           .order("created_at", { ascending: false })
       : { data: [] };
@@ -241,6 +260,9 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
             const progress = total > 0 ? Math.round((done / total) * 100) : 0;
             const title = (course.title ?? "").trim() || "(untitled)";
             const excerpt = (course.excerpt ?? "").trim();
+            const orgMeta =
+              (typeof course.organization_id === "string" ? membershipOrgMeta.get(course.organization_id) : null) ?? null;
+            const courseOrgKey = orgMeta?.slug ?? orgSlug;
 
             const coverUrl = (course.cover_image_url ?? "").trim();
 
@@ -272,6 +294,7 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <h3 className="text-lg font-semibold text-foreground truncate">{title}</h3>
+                      <p className="mt-1 text-xs font-medium text-foreground/70">{orgMeta?.label ?? "Organization"}</p>
                       <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{excerpt || "No excerpt yet."}</p>
                     </div>
                     <div className="shrink-0 flex flex-wrap items-center justify-end gap-2">
@@ -297,7 +320,7 @@ export default async function StudentMyCoursesPage({ params }: { params: Promise
                   </div>
 
                   <Button className="w-full gap-2" asChild>
-                    <Link href={`/org/${orgSlug}/courses/${(course.slug ?? "").trim() || course.id}/learn`}>
+                    <Link href={`/org/${courseOrgKey}/courses/${(course.slug ?? "").trim() || course.id}/learn`}>
                       <Play className="h-4 w-4" />
                       Continue Learning
                     </Link>

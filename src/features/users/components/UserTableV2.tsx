@@ -363,13 +363,14 @@ export function UserTableV2({
   const resolveOrgForUser = useCallback(
     (u: ApiUser): { label: string; inactive: boolean } | null => {
       const oid = typeof u.organization_id === "string" && u.organization_id.trim().length ? u.organization_id.trim() : null;
+      // On org-scoped user pages, always present the current org context.
+      // A member may belong to multiple orgs while `user.organization_id` still points to their home org.
+      if (orgScopedId && orgScopedLabel) {
+        return { label: orgScopedLabel, inactive: false };
+      }
       if (oid) {
         const orgRow = orgById.get(oid) ?? null;
         if (orgRow) return resolveOrgLabel(orgRow);
-      }
-      // Org-scoped pages (org admins + super/system viewing /org/[orgId]/users) may not have orgs list loaded.
-      if (orgScopedId && orgScopedLabel && (!oid || oid === orgScopedId)) {
-        return { label: orgScopedLabel, inactive: false };
       }
       return oid ? { label: oid, inactive: false } : null;
     },
@@ -1797,12 +1798,17 @@ function UserDetailsDrawer(props: {
   const isPending = isEnabled && user.onboarding_status === "pending";
   const canResend = isPending || (!!user.invited_at && !user.activated_at);
 
-  const org = user.organization_id ? organizations.find((o) => o.id === user.organization_id) ?? null : null;
+  const org =
+    props.orgScopedId && props.orgScopedLabel
+      ? organizations.find((o) => o.id === props.orgScopedId) ?? null
+      : user.organization_id
+        ? organizations.find((o) => o.id === user.organization_id) ?? null
+        : null;
   const orgInfo =
-    org
-      ? resolveOrgLabel(org)
-      : props.orgScopedId && props.orgScopedLabel && (!user.organization_id || user.organization_id === props.orgScopedId)
-        ? { label: props.orgScopedLabel, inactive: false }
+    props.orgScopedId && props.orgScopedLabel
+      ? { label: props.orgScopedLabel, inactive: false }
+      : org
+        ? resolveOrgLabel(org)
         : null;
   const avatarUrl = typeof user.avatar_url === "string" && user.avatar_url.trim().length ? user.avatar_url.trim() : null;
 
@@ -2640,12 +2646,17 @@ function MobileUserCard(props: {
   const canDelete = canDeleteUser(callerRole, user.role);
   const canManageCourseAccess = callerRole === "organization_admin" && user.role === "member";
 
-  const org = user.organization_id ? organizations.find((o) => o.id === user.organization_id) ?? null : null;
+  const org =
+    props.orgScopedId && props.orgScopedLabel
+      ? organizations.find((o) => o.id === props.orgScopedId) ?? null
+      : user.organization_id
+        ? organizations.find((o) => o.id === user.organization_id) ?? null
+        : null;
   const orgInfo =
-    org
-      ? resolveOrgLabel(org)
-      : props.orgScopedId && props.orgScopedLabel && (!user.organization_id || user.organization_id === props.orgScopedId)
-        ? { label: props.orgScopedLabel, inactive: false }
+    props.orgScopedId && props.orgScopedLabel
+      ? { label: props.orgScopedLabel, inactive: false }
+      : org
+        ? resolveOrgLabel(org)
         : null;
   const orgCreated = org?.created_at ?? null;
   const avatarUrl = typeof user.avatar_url === "string" && user.avatar_url.trim().length ? user.avatar_url.trim() : null;

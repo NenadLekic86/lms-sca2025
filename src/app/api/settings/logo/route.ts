@@ -6,6 +6,14 @@ export const runtime = 'nodejs';
 
 const MAX_BYTES = 2 * 1024 * 1024; // 2 MB (matches your bucket limit)
 const ALLOWED_MIME = new Set(['image/png', 'image/webp', 'image/svg+xml']);
+const SLOT_TO_FIELD = {
+  legacy: 'logo_url',
+  top: 'top_logo_url',
+  'top-compact': 'top_logo_compact_url',
+  bottom: 'bottom_logo_url',
+} as const;
+
+type LogoSlot = keyof typeof SLOT_TO_FIELD;
 
 function getExt(mime: string): string {
   switch (mime) {
@@ -40,6 +48,14 @@ export async function POST(request: Request) {
     return apiError("FORBIDDEN", "Forbidden", { status: 403 });
   }
 
+  const url = new URL(request.url);
+  const slotRaw = (url.searchParams.get('slot') ?? 'legacy').trim().toLowerCase();
+  const slot = (slotRaw in SLOT_TO_FIELD ? slotRaw : null) as LogoSlot | null;
+  if (!slot) {
+    await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Invalid logo slot." });
+    return apiError("VALIDATION_ERROR", "Invalid logo slot.", { status: 400 });
+  }
+
   const form = await request.formData().catch(() => null);
   if (!form) {
     await logApiEvent({ request, caller, outcome: "error", status: 400, code: "VALIDATION_ERROR", publicMessage: "Invalid form data." });
@@ -68,7 +84,7 @@ export async function POST(request: Request) {
   // Versioned file name to avoid caching issues
   const ext = getExt(file.type);
   const ts = Date.now();
-  const objectPath = `logos/app-logo-${ts}.${ext}`;
+  const objectPath = `logos/${slot}-logo-${ts}.${ext}`;
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   const { error: uploadError } = await admin.storage
@@ -94,6 +110,7 @@ export async function POST(request: Request) {
 
   const { data: publicUrlData } = admin.storage.from('branding').getPublicUrl(objectPath);
   const publicUrl = publicUrlData.publicUrl;
+  const targetField = SLOT_TO_FIELD[slot];
 
   // Update the single settings row
   const { data: current, error: currentError } = await admin
@@ -117,11 +134,11 @@ export async function POST(request: Request) {
   const { data: updated, error: updateError } = await admin
     .from('public_app_settings')
     .update({
-      logo_url: publicUrl,
+      [targetField]: publicUrl,
       updated_at: new Date().toISOString(),
     })
     .eq('id', current.id)
-    .select('id, logo_url')
+    .select(`id, ${targetField}`)
     .single();
 
   if (updateError || !updated) {
@@ -149,6 +166,8 @@ export async function POST(request: Request) {
       metadata: {
         bucket: 'branding',
         path: objectPath,
+        slot,
+        target_field: targetField,
         logo_url: publicUrl,
         mime: file.type,
         size: file.size,
@@ -164,12 +183,14 @@ export async function POST(request: Request) {
     outcome: "success",
     status: 201,
     publicMessage: "Logo uploaded.",
-    details: { logo_url: updated.logo_url, path: objectPath, mime: file.type, size: file.size },
+    details: { slot, target_field: targetField, logo_url: publicUrl, path: objectPath, mime: file.type, size: file.size },
   });
 
   return apiOk(
     {
-      logo_url: updated.logo_url,
+      slot,
+      target_field: targetField,
+      logo_url: publicUrl,
       path: objectPath,
     },
     { status: 201, message: "Logo uploaded." }

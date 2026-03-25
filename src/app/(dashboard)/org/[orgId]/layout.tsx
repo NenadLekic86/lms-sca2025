@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getServerUser } from '@/lib/supabase/server';
 import { resolveOrgKey } from '@/lib/organizations/resolveOrgKey';
+import { hasActiveOrganizationMembership } from '@/lib/organizations/memberships';
 import { notFound } from 'next/navigation';
 
 export default async function OrgLayout({
@@ -36,7 +37,12 @@ export default async function OrgLayout({
 
   // organization_admin and member must belong to this org
   if (['organization_admin', 'member'].includes(user.role)) {
-    if (!user.organization_id || user.organization_id !== org.id) {
+    const { hasMembership } = await hasActiveOrganizationMembership(
+      user.id,
+      org.id,
+      user.role === "organization_admin" ? ["organization_admin"] : ["member"]
+    );
+    if (!hasMembership) {
       redirect('/unauthorized');
     }
     return <>{children}</>;
