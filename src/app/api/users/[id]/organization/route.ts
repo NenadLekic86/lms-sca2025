@@ -270,6 +270,43 @@ export async function PATCH(
       }
     }
 
+    // Keep organization_memberships in sync for org-admin org assignment (best-effort).
+    // For org-admins, access to /org/[orgId] is enforced through organization_memberships, not users.organization_id.
+    try {
+      if (targetRole === "organization_admin") {
+        const { data: existing } = await admin
+          .from("organization_memberships")
+          .select("user_id")
+          .eq("user_id", userId)
+          .eq("organization_id", organization_id);
+
+        if (Array.isArray(existing) && existing.length > 0) {
+          await admin
+            .from("organization_memberships")
+            .update({ role: "organization_admin", is_active: true })
+            .eq("user_id", userId)
+            .eq("organization_id", organization_id);
+        } else {
+          await admin.from("organization_memberships").insert({
+            user_id: userId,
+            organization_id,
+            role: "organization_admin",
+            is_active: true,
+          });
+        }
+
+        // Enforce single-organization org-admin: deactivate any other org-admin memberships.
+        await admin
+          .from("organization_memberships")
+          .update({ is_active: false })
+          .eq("user_id", userId)
+          .eq("role", "organization_admin")
+          .neq("organization_id", organization_id);
+      }
+    } catch {
+      // ignore
+    }
+
     // Best-effort audit log
     try {
       await admin.from("audit_logs").insert({

@@ -99,12 +99,12 @@ export async function PATCH(
       return apiError("FORBIDDEN", "Forbidden", { status: 403 });
     }
 
-    // 4. Load target user to check if they're super_admin
+    // 4. Load target user to check if they're super_admin (and get current org)
     // NOTE: use admin client to bypass RLS safely (route already enforces caller permissions).
     const admin = createAdminSupabaseClient();
     const { data: targetUser, error: targetUserError } = await admin
       .from('users')
-      .select('id, role')
+      .select('id, role, organization_id')
       .eq('id', targetUserId)
       .single();
 
@@ -120,7 +120,10 @@ export async function PATCH(
       return apiError("NOT_FOUND", "User not found.", { status: 404 });
     }
 
-    if ((targetUser as { role?: string | null }).role === 'super_admin') {
+    const previousRole = String((targetUser as { role?: unknown }).role ?? "");
+    const previousOrgId = (targetUser as { organization_id?: unknown }).organization_id;
+
+    if (previousRole === 'super_admin') {
       await logApiEvent({
         request,
         caller,
@@ -180,6 +183,55 @@ export async function PATCH(
         internalMessage: rpcError.message,
       });
       return apiError("INTERNAL", "Failed to change user role.", { status: 500 });
+    }
+
+    // 7. Keep organization_memberships in sync for org-admin role transitions
+    try {
+      // Promote to organization_admin: ensure active org-admin membership for their current organization_id.
+      if (newRole === "organization_admin") {
+        const orgId = typeof previousOrgId === "string" ? previousOrgId : null;
+        if (orgId) {
+          const { data: existing } = await admin
+            .from("organization_memberships")
+            .select("user_id")
+            .eq("user_id", targetUserId)
+            .eq("organization_id", orgId);
+
+          if (Array.isArray(existing) && existing.length > 0) {
+            await admin
+              .from("organization_memberships")
+              .update({ role: "organization_admin", is_active: true })
+              .eq("user_id", targetUserId)
+              .eq("organization_id", orgId);
+          } else {
+            await admin.from("organization_memberships").insert({
+              user_id: targetUserId,
+              organization_id: orgId,
+              role: "organization_admin",
+              is_active: true,
+            });
+          }
+
+          // Enforce single-organization org-admin: deactivate any other org-admin memberships.
+          await admin
+            .from("organization_memberships")
+            .update({ is_active: false })
+            .eq("user_id", targetUserId)
+            .eq("role", "organization_admin")
+            .neq("organization_id", orgId);
+        }
+      }
+
+      // Demote from organization_admin: deactivate org-admin memberships.
+      if (previousRole === "organization_admin" && newRole !== "organization_admin") {
+        await admin
+          .from("organization_memberships")
+          .update({ is_active: false })
+          .eq("user_id", targetUserId)
+          .eq("role", "organization_admin");
+      }
+    } catch {
+      // Best-effort: role change should not fail due to membership sync.
     }
 
     await logApiEvent({
