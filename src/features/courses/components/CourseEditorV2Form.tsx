@@ -11,6 +11,7 @@ import {
   Image as ImageIcon,
   ExternalLink,
   Eye,
+  FileSpreadsheet,
   FileText,
   GripVertical,
   Loader2,
@@ -99,6 +100,40 @@ export type CourseV2 = {
   assigned_member_ids?: string[];
   assigned_member_access?: Record<string, AccessDurationKey>;
   assigned_member_expires_at?: Record<string, string | null>;
+};
+
+type CourseAssignmentCsvPreview = {
+  course: { id: string; title: string };
+  summary: {
+    total_rows: number;
+    valid_rows: number;
+    invalid_rows: number;
+    assign_count: number;
+    update_count: number;
+    remove_count: number;
+    unchanged_count: number;
+  };
+  valid_rows: Array<{
+    row_number: number;
+    user_id: string;
+    email: string;
+    full_name: string;
+    assigned: boolean;
+    tfa: AccessDurationKey | null;
+    action: "assign" | "update" | "remove" | "unchanged";
+  }>;
+  invalid_rows: Array<{
+    row_number: number;
+    user_id: string;
+    email: string;
+    full_name: string;
+    error: string;
+  }>;
+  normalized_rows: Array<{
+    user_id: string;
+    assigned: boolean;
+    tfa: AccessDurationKey | null;
+  }>;
 };
 
 class StepError extends Error {
@@ -208,6 +243,16 @@ function deepClone<T>(value: T): T {
   const sc = (globalThis as any)?.structuredClone as ((v: unknown) => unknown) | undefined;
   if (typeof sc === "function") return sc(value) as T;
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function buildMembersSignatureValue(
+  defaultAccess: AccessDurationKey,
+  selectedIds: Iterable<string>,
+  accessById: Record<string, AccessDurationKey>
+): string {
+  const ids = [...selectedIds].sort();
+  const list = ids.map((id) => ({ id, access: accessById[id] ?? defaultAccess }));
+  return JSON.stringify({ default_access: defaultAccess, list });
 }
 
 function makeTempId(prefix: string): string {
@@ -967,6 +1012,12 @@ export function CourseEditorV2Form({
   const memberAccessPreviewEpochMsRef = useRef<number>(Date.now());
   const [membersOpen, setMembersOpen] = useState(false);
   const [memberSearch, setMemberSearch] = useState("");
+  const csvImportInputRef = useRef<HTMLInputElement | null>(null);
+  const [csvImportOpen, setCsvImportOpen] = useState(false);
+  const [csvImportFileName, setCsvImportFileName] = useState<string | null>(null);
+  const [csvImportPreview, setCsvImportPreview] = useState<CourseAssignmentCsvPreview | null>(null);
+  const [csvPreviewLoading, setCsvPreviewLoading] = useState(false);
+  const [csvApplyLoading, setCsvApplyLoading] = useState(false);
 
   // Certificate (Course Information tab)
   const [certLoading, setCertLoading] = useState(false);
@@ -1825,10 +1876,95 @@ export function CourseEditorV2Form({
   }
 
   const getMembersSignature = useCallback((): string => {
-    const ids = [...selectedMemberIds].sort();
-    const list = ids.map((id) => ({ id, access: memberAccessById[id] ?? memberDefaultAccess }));
-    return JSON.stringify({ default_access: memberDefaultAccess, list });
+    return buildMembersSignatureValue(memberDefaultAccess, selectedMemberIds, memberAccessById);
   }, [memberAccessById, memberDefaultAccess, selectedMemberIds]);
+
+  function applyImportedMembersToLocalState(rows: CourseAssignmentCsvPreview["normalized_rows"]) {
+    const now = new Date();
+    const nextSelectedIds = new Set(rows.filter((row) => row.assigned).map((row) => row.user_id));
+    const nextAccessById: Record<string, AccessDurationKey> = {};
+    const nextBaselineById: Record<string, string | null> = {};
+
+    for (const row of rows) {
+      if (!row.assigned || !row.tfa) continue;
+      nextAccessById[row.user_id] = row.tfa;
+      nextBaselineById[row.user_id] = computeAccessExpiresAt(row.tfa, now);
+    }
+
+    setSelectedMemberIds(nextSelectedIds);
+    setMemberAccessById(nextAccessById);
+    setBaselineMemberExpiresAtById(nextBaselineById);
+    memberAccessPreviewEpochMsRef.current = now.getTime();
+    savedMembersSignatureRef.current = buildMembersSignatureValue(memberDefaultAccess, nextSelectedIds, nextAccessById);
+  }
+
+  function openCsvImportModal() {
+    if (!courseId) {
+      toast.error("Save the course first before importing member assignments.");
+      return;
+    }
+    setCsvImportOpen(true);
+    setCsvImportPreview(null);
+    setCsvImportFileName(null);
+  }
+
+  async function handleCsvImportSelected(file: File | null) {
+    if (!file || !courseId) return;
+    setCsvPreviewLoading(true);
+    setCsvImportFileName(file.name);
+    setCsvImportPreview(null);
+    const t = toast.loading("Validating CSV…");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const { data, message } = await fetchJson<CourseAssignmentCsvPreview>(
+        `/api/org/courses/${courseId}/assignments/csv-import/preview`,
+        { method: "POST", body: form }
+      );
+      setCsvImportPreview(data);
+      toast.success(message || "CSV preview ready.", { id: t });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to preview CSV import.", { id: t });
+    } finally {
+      setCsvPreviewLoading(false);
+    }
+  }
+
+  async function applyCsvImport() {
+    if (!courseId || !csvImportPreview) return;
+    setCsvApplyLoading(true);
+    const t = toast.loading("Applying CSV import…");
+    try {
+      const { message } = await fetchJson<{
+        course_id: string;
+        assigned_count: number;
+        updated_count: number;
+        removed_count: number;
+        unchanged_count: number;
+      }>(`/api/org/courses/${courseId}/assignments/csv-import/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: csvImportPreview.normalized_rows }),
+      });
+      applyImportedMembersToLocalState(csvImportPreview.normalized_rows);
+      setCsvImportOpen(false);
+      setCsvImportPreview(null);
+      setCsvImportFileName(null);
+      toast.success(message || "CSV import applied.", { id: t });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to apply CSV import.", { id: t });
+    } finally {
+      setCsvApplyLoading(false);
+    }
+  }
+
+  function downloadAssignmentCsvTemplate() {
+    if (!courseId) {
+      toast.error("Save the course first before exporting the CSV template.");
+      return;
+    }
+    window.open(`/api/org/courses/${courseId}/assignments/csv`, "_blank", "noopener,noreferrer");
+  }
 
   const savedMembersSignatureRef = useRef<string>("");
   useEffect(() => {
@@ -3685,6 +3821,36 @@ export function CourseEditorV2Form({
           <div className="md:col-span-2 space-y-6">
             <div className="relative">
               <FieldLabel accent="#b87216">Members</FieldLabel>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!courseId || isBusy || csvPreviewLoading || csvApplyLoading}
+                  onClick={downloadAssignmentCsvTemplate}
+                >
+                  <FileSpreadsheet className="h-4 w-4" />
+                  Export CSV Template
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!courseId || isBusy || csvPreviewLoading || csvApplyLoading}
+                  onClick={openCsvImportModal}
+                >
+                  <Upload className="h-4 w-4" />
+                  Import CSV
+                </Button>
+                {!courseId ? <span className="text-xs text-muted-foreground">Save the course first to enable CSV import/export.</span> : null}
+              </div>
+              <div className="mt-3 rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground space-y-1">
+                <p>Export the CSV template first, then update one row per user for this course.</p>
+                <p>* Do not rename or delete columns. Required columns are <code>user_id</code>, <code>email</code>, <code>full_name</code>, <code>course_id</code>, <code>course_name</code>, <code>assigned</code>, and <code>tfa</code>.</p>
+                <p>* <code>assigned=true</code> assigns or updates access. <code>assigned=false</code> removes access.</p>
+                <p>* Allowed <code>tfa</code> values are <code>unlimited</code>, <code>3m</code>, <code>1m</code>, and <code>1w</code>.</p>
+                <p>* <code>course_id</code> must not be changed. <code>course_name</code> is for admin reference only.</p>
+              </div>
               <button
                 type="button"
                 className="mt-1 w-full h-10 rounded-md border bg-background px-3 text-left text-sm flex items-center justify-between hover:bg-muted/10 transition-colors cursor-pointer"
@@ -4951,6 +5117,139 @@ export function CourseEditorV2Form({
                   </>
                 );
               })()}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {csvImportOpen ? (
+        <div className="fixed inset-0 z-1000 bg-black/50 p-4 sm:p-6 overflow-y-auto">
+          <div className="min-h-[calc(100svh-2rem)] sm:min-h-[calc(100svh-3rem)] flex items-center justify-center">
+            <div className="w-full max-w-4xl rounded-lg border bg-card shadow-xl">
+              <div className="flex items-center justify-between border-b px-4 py-3">
+                <div>
+                  <h3 className="font-semibold">Import Course Assignments CSV</h3>
+                  <p className="text-sm text-muted-foreground">Upload a CSV template for this course, preview changes, then apply them.</p>
+                </div>
+                <Button type="button" size="icon-sm" variant="ghost" onClick={() => setCsvImportOpen(false)} disabled={csvPreviewLoading || csvApplyLoading}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="p-4 space-y-4">
+                <div className="rounded-md border bg-muted/20 p-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={csvPreviewLoading || csvApplyLoading}
+                      onClick={() => csvImportInputRef.current?.click()}
+                    >
+                      <Upload className="h-4 w-4" />
+                      {csvPreviewLoading ? "Validating..." : "Choose CSV File"}
+                    </Button>
+                    <Button type="button" variant="outline" disabled={csvPreviewLoading || csvApplyLoading} onClick={downloadAssignmentCsvTemplate}>
+                      <FileSpreadsheet className="h-4 w-4" />
+                      Download Fresh Template
+                    </Button>
+                    <span className="text-sm text-muted-foreground">{csvImportFileName ?? "No file selected"}</span>
+                  </div>
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Template includes instruction lines at the top. Required columns: <code>user_id</code>, <code>email</code>, <code>full_name</code>, <code>course_id</code>, <code>course_name</code>, <code>assigned</code>, <code>tfa</code>.
+                    Allowed TFA values: <code>unlimited</code>, <code>3m</code>, <code>1m</code>, <code>1w</code>.
+                  </p>
+                  <input
+                    ref={csvImportInputRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null;
+                      void handleCsvImportSelected(file);
+                      e.currentTarget.value = "";
+                    }}
+                  />
+                </div>
+
+                {csvImportPreview ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+                      {[
+                        ["Rows", String(csvImportPreview.summary.total_rows)],
+                        ["Assign", String(csvImportPreview.summary.assign_count)],
+                        ["Update", String(csvImportPreview.summary.update_count)],
+                        ["Remove", String(csvImportPreview.summary.remove_count)],
+                        ["Unchanged", String(csvImportPreview.summary.unchanged_count)],
+                        ["Invalid", String(csvImportPreview.summary.invalid_rows)],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-md border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">{label}</div>
+                          <div className="mt-1 text-lg font-semibold text-foreground">{value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {csvImportPreview.invalid_rows.length > 0 ? (
+                      <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4">
+                        <div className="mb-2 text-sm font-medium text-destructive">Fix invalid rows before applying the import.</div>
+                        <div className="max-h-48 overflow-auto space-y-2 text-sm">
+                          {csvImportPreview.invalid_rows.map((row) => (
+                            <div key={`${row.row_number}-${row.user_id}`} className="rounded border bg-background px-3 py-2">
+                              <div className="font-medium">Row {row.row_number} • {row.full_name || row.email || row.user_id}</div>
+                              <div className="text-muted-foreground">{row.error}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="rounded-md border">
+                      <div className="border-b px-4 py-3">
+                        <div className="font-medium">Preview</div>
+                        <div className="text-sm text-muted-foreground">These are the changes that will be applied to the course members list.</div>
+                      </div>
+                      <div className="max-h-72 overflow-auto">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-card">
+                            <tr className="border-b text-left">
+                              <th className="px-4 py-2">Row</th>
+                              <th className="px-4 py-2">Member</th>
+                              <th className="px-4 py-2">Email</th>
+                              <th className="px-4 py-2">Assigned</th>
+                              <th className="px-4 py-2">TFA</th>
+                              <th className="px-4 py-2">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {csvImportPreview.valid_rows.map((row) => (
+                              <tr key={`${row.row_number}-${row.user_id}`} className="border-b last:border-b-0">
+                                <td className="px-4 py-2 text-muted-foreground">{row.row_number}</td>
+                                <td className="px-4 py-2">{row.full_name || "—"}</td>
+                                <td className="px-4 py-2">{row.email || "—"}</td>
+                                <td className="px-4 py-2">{row.assigned ? "Yes" : "No"}</td>
+                                <td className="px-4 py-2">{row.tfa ? accessKeyLabel(row.tfa) : "—"}</td>
+                                <td className="px-4 py-2 capitalize">{row.action}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex items-center justify-between border-t px-4 py-3">
+                <Button type="button" variant="outline" onClick={() => setCsvImportOpen(false)} disabled={csvPreviewLoading || csvApplyLoading}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  disabled={!csvImportPreview || csvImportPreview.invalid_rows.length > 0 || csvApplyLoading || csvPreviewLoading}
+                  onClick={() => void applyCsvImport()}
+                >
+                  {csvApplyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Apply Import
+                </Button>
+              </div>
             </div>
           </div>
         </div>

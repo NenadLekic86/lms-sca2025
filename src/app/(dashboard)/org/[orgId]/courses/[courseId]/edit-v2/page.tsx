@@ -1,8 +1,9 @@
 import { notFound, redirect } from "next/navigation";
-import { createAdminSupabaseClient, createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
+import { createServerSupabaseClient, getServerUser } from "@/lib/supabase/server";
 import { resolveOrgKey } from "@/lib/organizations/resolveOrgKey";
 import { CourseEditorV2Form } from "@/features/courses/components/CourseEditorV2Form";
 import type { CourseTopic, CourseV2, MemberOption } from "@/features/courses/components/CourseEditorV2Form";
+import { loadActiveOrganizationMembers } from "@/lib/courseAssignments/syncAssignments";
 
 export const fetchCache = "force-no-store";
 
@@ -45,14 +46,14 @@ export default async function OrgCourseEditV2Page({
   if (!user.organization_id || user.organization_id !== orgId) redirect("/unauthorized");
 
   const supabase = await createServerSupabaseClient();
-  const admin = createAdminSupabaseClient();
+  const membersResultPromise = loadActiveOrganizationMembers(orgId);
 
   const [
     { data: courseRow, error: courseError },
     { data: topicsData },
     { data: itemsData },
-    { data: membersData, error: membersError },
     { data: assignedData },
+    membersResult,
   ] = await Promise.all([
       supabase
         .from("courses")
@@ -67,37 +68,24 @@ export default async function OrgCourseEditV2Page({
         .select("id, topic_id, item_type, title, position, payload_json, is_required")
         .eq("course_id", courseId)
         .order("position", { ascending: true }),
-      admin
-        .from("users")
-        .select("id, full_name, email")
-        .eq("organization_id", orgId)
-        .eq("role", "member")
-        .or("is_active.is.null,is_active.eq.true")
-        .order("full_name", { ascending: true }),
       supabase
         .from("course_member_assignments")
         .select("user_id, access_duration_key, access_expires_at, assigned_at")
         .eq("course_id", courseId)
         .eq("organization_id", orgId),
+      membersResultPromise,
     ]);
 
   if (courseError || !courseRow) redirect(`/org/${orgSlug}/courses`);
   if ((courseRow.organization_id ?? null) !== orgId) redirect("/unauthorized");
-  if (membersError) {
-    throw new Error(`Failed to load members: ${membersError.message}`);
+  if (membersResult.error) {
+    throw new Error(`Failed to load members: ${membersResult.error}`);
   }
 
-  const memberOptions: MemberOption[] = (Array.isArray(membersData) ? membersData : [])
-    .map((m) => {
-      const fullName = typeof (m as { full_name?: unknown }).full_name === "string" && (m as { full_name: string }).full_name.trim().length > 0 ? (m as { full_name: string }).full_name.trim() : null;
-      const email = typeof (m as { email?: unknown }).email === "string" && (m as { email: string }).email.trim().length > 0 ? (m as { email: string }).email.trim() : null;
-      const id = String((m as { id: string }).id);
-      return {
-        id,
-        label: fullName ?? email ?? id,
-      };
-    })
-    .filter((m): m is { id: string; label: string } => typeof m.id === "string" && typeof m.label === "string");
+  const memberOptions: MemberOption[] = membersResult.members.map((m) => ({
+    id: m.userId,
+    label: m.fullName ?? m.email ?? m.userId,
+  }));
 
   const itemMap = new Map<string, ItemRow[]>();
   for (const item of (Array.isArray(itemsData) ? itemsData : []) as ItemRow[]) {
